@@ -1636,12 +1636,16 @@ for (int tt = 0; tt < kBaseTextureTypeCount; ++tt)
                     {
                         // `SampleCmp()` and `SampleCmpLevelZero`
                         sb << "__target_intrinsic(glsl, \"texture($p, vec" << arrCoordCount + 1 << "($2, $3))\")";
-                        sb << "float SampleCmp(SamplerComparisonState s, ";
+                        sb << "float SampleCmp(";
+                        if (!prefixInfo.combined)
+                            sb << "SamplerComparisonState s, ";
                         sb << "float" << kBaseTextureTypes[tt].coordCount + isArray << " location, ";
                         sb << "float compareValue";
                         sb << ");\n";
                         sb << "__target_intrinsic(glsl, \"texture($p, vec" << arrCoordCount + 1 << "($2, $3))\")";
-                        sb << "float SampleCmpLevelZero(SamplerComparisonState s, ";
+                        sb << "float SampleCmpLevelZero(";
+                        if (!prefixInfo.combined)
+                            sb << "SamplerComparisonState s, ";
                         sb << "float" << kBaseTextureTypes[tt].coordCount + isArray << " location, ";
                         sb << "float compareValue";
                         sb << ");\n";
@@ -1695,13 +1699,17 @@ for (int tt = 0; tt < kBaseTextureTypeCount; ++tt)
                         // saying they only exclude `offset` for cube maps (which makes
                         // sense). I'm going to assume the documentation for `SampleCmp`
                         // is just wrong.
-
-                        sb << "float SampleCmp(SamplerComparisonState s, ";
+                        
+                        sb << "float SampleCmp(";
+                        if (!prefixInfo.combined)
+                            sb << "SamplerComparisonState s, ";
                         sb << "float" << kBaseTextureTypes[tt].coordCount + isArray << " location, ";
                         sb << "float compareValue, ";
                         sb << "constexpr int" << kBaseTextureTypes[tt].coordCount << " offset);\n";
-
-                        sb << "float SampleCmpLevelZero(SamplerComparisonState s, ";
+                        
+                        sb << "float SampleCmpLevelZero(";
+                        if (!prefixInfo.combined)
+                            sb << "SamplerComparisonState s, ";
                         sb << "float" << kBaseTextureTypes[tt].coordCount + isArray << " location, ";
                         sb << "float compareValue, ";
                         sb << "constexpr int" << kBaseTextureTypes[tt].coordCount << " offset);\n";
