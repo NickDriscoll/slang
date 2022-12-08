@@ -161,7 +161,10 @@ namespace Slang
         //Session* getSession() { return m_session; }
 
         Token ReadToken();
+        Token readTokenImpl(TokenType type, bool forceSkippingToClosingToken);
         Token ReadToken(TokenType type);
+        // Same as `ReadToken`, but force skip to the matching closing token on error.
+        Token ReadMatchingToken(TokenType type);
         Token ReadToken(const char* string);
 
         bool LookAheadToken(TokenType type);
@@ -551,7 +554,7 @@ namespace Slang
         return TryRecover(parser, recoverBefore, 1, recoverAfter, 1);
     }
 
-    Token Parser::ReadToken(TokenType expected)
+    Token Parser::readTokenImpl(TokenType expected, bool forceSkippingToClosingToken)
     {
         if (tokenReader.peekTokenType() == expected)
         {
@@ -563,33 +566,51 @@ namespace Slang
         if (!isRecovering)
         {
             Unexpected(this, expected);
-            return tokenReader.peekToken();
+            if (!forceSkippingToClosingToken)
+                return tokenReader.peekToken();
+            switch (expected)
+            {
+            case TokenType::RBrace:
+            case TokenType::RParent:
+            case TokenType::RBracket:
+                break;
+            default:
+                return tokenReader.peekToken();
+            }
         }
+
+        // Try to find a place to recover
+        if (TryRecoverBefore(this, expected))
+        {
+            isRecovering = false;
+            return tokenReader.advanceToken();
+        }
+        // This could be dangerous: if `ReadToken()` is being called
+        // in a loop we may never make forward progress, so we use
+        // a counter to limit the maximum amount of times we are allowed
+        // to peek the same token. If the outter parsing logic is
+        // correct, we will pop back to the right level. If there are
+        // erroneous parsing logic, this counter is to prevent us
+        // looping infinitely.
+        static const int kMaxTokenPeekCount = 64;
+        sameTokenPeekedTimes++;
+        if (sameTokenPeekedTimes < kMaxTokenPeekCount)
+            return tokenReader.peekToken();
         else
         {
-            // Try to find a place to recover
-            if (TryRecoverBefore(this, expected))
-            {
-                isRecovering = false;
-                return tokenReader.advanceToken();
-            }
-            // This could be dangerous: if `ReadToken()` is being called
-            // in a loop we may never make forward progress, so we use
-            // a counter to limit the maximum amount of times we are allowed
-            // to peek the same token. If the outter parsing logic is
-            // correct, we will pop back to the right level. If there are
-            // erroneous parsing logic, this counter is to prevent us
-            // looping infinitely.
-            static const int kMaxTokenPeekCount = 64;
-            sameTokenPeekedTimes++;
-            if (sameTokenPeekedTimes < kMaxTokenPeekCount)
-                return tokenReader.peekToken();
-            else
-            {
-                sameTokenPeekedTimes = 0;
-                return tokenReader.advanceToken();
-            }
+            sameTokenPeekedTimes = 0;
+            return tokenReader.advanceToken();
         }
+    }
+
+    Token Parser::ReadToken(TokenType expected)
+    {
+        return readTokenImpl(expected, false);
+    }
+
+    Token Parser::ReadMatchingToken(TokenType expected)
+    {
+        return readTokenImpl(expected, true);
     }
 
     bool Parser::LookAheadToken(const char* string, int offset)
@@ -1101,6 +1122,14 @@ namespace Slang
                         AddModifier(&modifierLink, parsedModifier);
                         continue;
                     }
+                    else if (AdvanceIf(parser, "no_diff"))
+                    {
+                        parsedModifier = parser->astBuilder->create<NoDiffModifier>();
+                        parsedModifier->keywordName = nameToken.getName();
+                        parsedModifier->loc = nameToken.loc;
+                        AddModifier(&modifierLink, parsedModifier);
+                        continue;
+                    }
 
                     // If there was no match for a modifier keyword, then we
                     // must be at the end of the modifier sequence
@@ -1438,7 +1467,7 @@ namespace Slang
 
         // Allow a declaration to use the keyword `void` for a parameter list,
         // since that was required in ancient C, and continues to be supported
-        // in a bunc hof its derivatives even if it is a Bad Design Choice
+        // in a bunch of its derivatives even if it is a Bad Design Choice
         //
         // TODO: conditionalize this so we don't keep this around for "pure"
         // Slang code
@@ -1677,7 +1706,7 @@ namespace Slang
                 //
                 parser->ReadToken(TokenType::LParent);
                 declarator = parseDeclarator(parser, options);
-                parser->ReadToken(TokenType::RParent);
+                parser->ReadMatchingToken(TokenType::RParent);
             }
             break;
 
@@ -2107,6 +2136,26 @@ namespace Slang
     static NodeBase* parseForwardDifferentiate(Parser* parser, void* /* unused */)
     {
         return parseForwardDifferentiate(parser);
+    }
+
+        /// Parse an expression of the form __bwd_diff(fn) where fn is an 
+        /// identifier pointing to a function.
+    static Expr* parseBackwardDifferentiate(Parser* parser)
+    {
+        BackwardDifferentiateExpr* bwdDiffExpr = parser->astBuilder->create<BackwardDifferentiateExpr>();
+
+        parser->ReadToken(TokenType::LParent);
+
+        bwdDiffExpr->baseFunction = parser->ParseExpression();
+
+        parser->ReadToken(TokenType::RParent);
+
+        return bwdDiffExpr;
+    }
+
+    static NodeBase* parseBackwardDifferentiate(Parser* parser, void* /* unused */)
+    {
+        return parseBackwardDifferentiate(parser);
     }
 
         /// Parse a `This` type expression
@@ -3814,6 +3863,17 @@ namespace Slang
             }
             break;
 
+        case TokenType::LBrace:
+        case TokenType::LParent:
+            {
+                // We shouldn't be seeing an LBrace or an LParent when expecting a decl.
+                // However recovery logic may lead us here. In this case we just
+                // skip the whole `{}` block and return an empty decl.
+                SkipBalancedToken(&parser->tokenReader);
+                decl = parser->astBuilder->create<EmptyDecl>();
+                decl->loc = loc;
+            }
+            break;
         // If nothing else matched, we try to parse an "ordinary" declarator-based declaration
         default:
             decl = ParseDeclaratorDecl(parser, containerDecl, modifiers);
@@ -5064,6 +5124,14 @@ namespace Slang
         tryExpr->base = parser->ParseLeafExpression();
         tryExpr->scope = parser->currentScope;
         return tryExpr;
+    }
+
+    static NodeBase* parseTreatAsDifferentiableExpr(Parser* parser, void* /*userData*/)
+    {
+        auto noDiffExpr = parser->astBuilder->create<TreatAsDifferentiableExpr>();
+        noDiffExpr->innerExpr = parser->ParseLeafExpression();
+        noDiffExpr->scope = parser->currentScope;
+        return noDiffExpr;
     }
 
     static bool _isFinite(double value)
@@ -6607,6 +6675,11 @@ namespace Slang
         _makeParseModifier("lineadj",       HLSLLineAdjModifier::kReflectClassInfo),
         _makeParseModifier("triangleadj",   HLSLTriangleAdjModifier::kReflectClassInfo),
 
+        // Modifiers for mesh shader parameters
+        _makeParseModifier("vertices",      HLSLVerticesModifier::kReflectClassInfo),
+        _makeParseModifier("indices",       HLSLIndicesModifier::kReflectClassInfo),
+        _makeParseModifier("primitives",    HLSLPrimitivesModifier::kReflectClassInfo),
+
         // Modifiers for unary operator declarations
         _makeParseModifier("__prefix",      PrefixModifier::kReflectClassInfo),
         _makeParseModifier("__postfix",     PostfixModifier::kReflectClassInfo),
@@ -6645,8 +6718,10 @@ namespace Slang
         _makeParseExpr("nullptr", parseNullPtrExpr),
         _makeParseExpr("none", parseNoneExpr),
         _makeParseExpr("try",     parseTryExpr),
+        _makeParseExpr("no_diff", parseTreatAsDifferentiableExpr),
         _makeParseExpr("__TaggedUnion", parseTaggedUnionType),
-        _makeParseExpr("__fwd_diff", parseForwardDifferentiate)
+        _makeParseExpr("__fwd_diff", parseForwardDifferentiate),
+        _makeParseExpr("__bwd_diff", parseBackwardDifferentiate)
     };
 
     ConstArrayView<SyntaxParseInfo> getSyntaxParseInfos()

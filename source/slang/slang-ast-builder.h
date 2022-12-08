@@ -36,8 +36,8 @@ public:
     Type* getNullPtrType();
         /// Get the NullPtr type
     Type* getNoneType();
-        /// Get the DifferentialBottom type.
-    Type* getDifferentialBottomType();
+        /// Get the `IDifferentiable` type
+    Type* getDiffInterfaceType();
 
     const ReflectClassInfo* findClassInfo(Name* name);
     SyntaxClass<NodeBase> findSyntaxClass(Name* name);
@@ -87,7 +87,7 @@ protected:
     Type* m_dynamicType = nullptr;
     Type* m_nullPtrType = nullptr;
     Type* m_noneType = nullptr;
-    Type* m_diffBottomType = nullptr;
+    Type* m_diffInterfaceType = nullptr;
     Type* m_builtinTypes[Index(BaseType::CountOf)];
 
     Dictionary<String, Decl*> m_magicDecls;
@@ -306,12 +306,11 @@ public:
     Type* getOverloadedType() { return m_sharedASTBuilder->m_overloadedType; }
     Type* getErrorType() { return m_sharedASTBuilder->m_errorType; }
     Type* getBottomType() { return m_sharedASTBuilder->m_bottomType; }
-    Type* getDifferentialBottomType() { return m_sharedASTBuilder->getDifferentialBottomType(); }
     Type* getStringType() { return m_sharedASTBuilder->getStringType(); }
     Type* getNullPtrType() { return m_sharedASTBuilder->getNullPtrType(); }
     Type* getNoneType() { return m_sharedASTBuilder->getNoneType(); }
     Type* getEnumTypeType() { return m_sharedASTBuilder->getEnumTypeType(); }
-
+    Type* getDiffInterfaceType() { return m_sharedASTBuilder->getDiffInterfaceType(); }
         // Construct the type `Ptr<valueType>`, where `Ptr`
         // is looked up as a builtin type.
     PtrType* getPtrType(Type* valueType);
@@ -345,6 +344,11 @@ public:
 
     bool isDifferentiableInterfaceAvailable();
 
+    MeshOutputType* getMeshOutputTypeFromModifier(
+        HLSLMeshShaderOutputModifier* modifier,
+        Type* elementType,
+        IntVal* maxElementCount);
+
     DeclRef<Decl> getBuiltinDeclRef(const char* builtinMagicTypeName, Val* genericArg);
 
     Type* getAndType(Type* left, Type* right);
@@ -356,6 +360,7 @@ public:
     }
     Val* getUNormModifierVal();
     Val* getSNormModifierVal();
+    Val* getNoDiffModifierVal();
 
     TypeType* getTypeType(Type* type);
 

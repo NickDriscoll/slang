@@ -829,6 +829,16 @@ class VulkanHitAttributesAttribute : public Attribute
     SLANG_AST_CLASS(VulkanHitAttributesAttribute)
 };
 
+// A `[__vulkanHitObjectAttributes(location)]` attribute, which is used in the
+// standard library implementation to indicate that a variable
+// actually represents the attributes on a HitObject as part of
+// Shader ExecutionReordering
+class VulkanHitObjectAttributesAttribute : public Attribute
+{
+    SLANG_AST_CLASS(VulkanHitObjectAttributesAttribute)
+
+    int location;
+};
 
 // A `[mutating]` attribute, which indicates that a member
 // function is allowed to modify things through its `this`
@@ -892,6 +902,28 @@ class HLSLTriangleAdjModifier : public HLSLGeometryShaderInputPrimitiveTypeModif
     SLANG_AST_CLASS(HLSLTriangleAdjModifier)
 };
 
+// Mesh shader paramters
+
+class HLSLMeshShaderOutputModifier : public Modifier
+{
+    SLANG_AST_CLASS(HLSLMeshShaderOutputModifier)
+};
+
+class HLSLVerticesModifier : public HLSLMeshShaderOutputModifier
+{
+    SLANG_AST_CLASS(HLSLVerticesModifier)
+};
+
+class HLSLIndicesModifier : public HLSLMeshShaderOutputModifier
+{
+    SLANG_AST_CLASS(HLSLIndicesModifier)
+};
+
+class HLSLPrimitivesModifier : public HLSLMeshShaderOutputModifier
+{
+    SLANG_AST_CLASS(HLSLPrimitivesModifier)
+};
+
 // A modifier to indicate that a constructor/initializer can be used
 // to perform implicit type conversion, and to specify the cost of
 // the conversion, if applied.
@@ -940,6 +972,15 @@ class UnsafeForceInlineEarlyAttribute : public Attribute
 class ForceInlineAttribute : public Attribute
 {
     SLANG_AST_CLASS(ForceInlineAttribute)
+};
+
+
+// A `[TreatAsDifferentiableAttribute]` attribute indicates that a function or an interface
+// should be treated as differentiable in IR validation step.
+//
+class TreatAsDifferentiableAttribute : public Attribute
+{
+    SLANG_AST_CLASS(TreatAsDifferentiableAttribute)
 };
 
     /// An attribute that marks a type declaration as either allowing or
@@ -1031,7 +1072,52 @@ class ForwardDerivativeAttribute : public DifferentiableAttribute
 {
     SLANG_AST_CLASS(ForwardDerivativeAttribute)
 
-    DeclRefExpr* funcDeclRef;
+    Expr* funcExpr;
+};
+
+    /// The `[ForwardDerivativeOf(primalFunction)]` attribute marks the decorated function as custom
+    /// derivative implementation for `primalFunction`.
+    /// ForwardDerivativeOfAttribute inherits from DifferentiableAttribute because a derivative
+    /// function itself is considered differentiable.
+class ForwardDerivativeOfAttribute : public DifferentiableAttribute
+{
+    SLANG_AST_CLASS(ForwardDerivativeOfAttribute)
+
+    Expr* funcExpr;
+
+    Expr* backDeclRef; // DeclRef to this derivative function when initiated from primalFunction.
+};
+
+    /// The `[BackwardDifferentiable]` attribute indicates that a function can be backward-differentiated.
+class BackwardDifferentiableAttribute : public DifferentiableAttribute
+{
+    SLANG_AST_CLASS(BackwardDifferentiableAttribute)
+};
+
+    /// The `[BackwardDerivative(function)]` attribute specifies a custom function that should
+    /// be used as the backward-derivative for the decorated function.
+class BackwardDerivativeAttribute : public DifferentiableAttribute
+{
+    SLANG_AST_CLASS(BackwardDerivativeAttribute)
+    Expr* funcExpr;
+};
+
+    /// The `[BackwardDerivativeOf(primalFunction)]` attribute marks the decorated function as custom
+    /// backward-derivative implementation for `primalFunction`.
+class BackwardDerivativeOfAttribute : public DifferentiableAttribute
+{
+    SLANG_AST_CLASS(BackwardDerivativeOfAttribute)
+
+    Expr* funcExpr;
+
+    Expr* backDeclRef; // DeclRef to this derivative function when initiated from primalFunction.
+};
+
+    /// The `[NoDiffThis]` attribute is used to specify that the `this` parameter should not be
+    /// included for differentiation.
+class NoDiffThisAttribute : public Attribute
+{
+    SLANG_AST_CLASS(NoDiffThisAttribute)
 };
 
     /// Indicates that the modified declaration is one of the "magic" declarations
@@ -1131,6 +1217,10 @@ class SNormModifier : public ResourceElementFormatModifier
     SLANG_AST_CLASS(SNormModifier)
 };
 
+class NoDiffModifier : public TypeModifier
+{
+    SLANG_AST_CLASS(NoDiffModifier)
+};
 
 
 } // namespace Slang

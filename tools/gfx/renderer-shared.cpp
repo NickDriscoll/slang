@@ -6,7 +6,6 @@
 #include "../../source/core/slang-file-system.h"
 
 #include "../../slang.h"
-#include "../../source/core/slang-digest-util.h"
 
 using namespace Slang;
 
@@ -331,19 +330,6 @@ void PipelineStateBase::initializeBase(const PipelineStateDesc& inDesc)
     }
 }
 
-void updateCacheEntry(ISlangMutableFileSystem* fileSystem, slang::IBlob* compiledCode, String shaderFilename, slang::Digest ASTHash)
-{
-    auto hashSize = sizeof(slang::Digest);
-
-    auto bufferSize = hashSize + compiledCode->getBufferSize();
-    List<uint8_t> contents;
-    contents.setCount(bufferSize);
-    uint8_t* buffer = contents.begin();
-    memcpy(buffer, &ASTHash, hashSize);
-    memcpy(buffer + hashSize, (void*)compiledCode->getBufferPointer(), compiledCode->getBufferSize());
-    fileSystem->saveFile(shaderFilename.getBuffer(), buffer, bufferSize);
-}
-
 Result RendererBase::getEntryPointCodeFromShaderCache(
     slang::IComponentType* program,
     SlangInt entryPointIndex,
@@ -362,19 +348,21 @@ Result RendererBase::getEntryPointCodeFromShaderCache(
     ComPtr<slang::ISession> session;
     getSlangSession(session.writeRef());
 
-    slang::Digest shaderKey;
-    program->computeDependencyBasedHash(entryPointIndex, targetIndex, &shaderKey);
+    ComPtr<ISlangBlob> shaderKeyBlob;
+    program->computeDependencyBasedHash(entryPointIndex, targetIndex, shaderKeyBlob.writeRef());
+    DigestType shaderKey(shaderKeyBlob);
 
     // Produce a hash using the AST for this program - This is needed to check whether a cache entry is effectively dirty,
     // or to save along with the compiled code into an entry so the entry can be checked if fetched later on.
-    slang::Digest contentsHash;
-    program->computeContentsBasedHash(&contentsHash);
+    ComPtr<ISlangBlob> contentsHashBlob;
+    program->computeContentsBasedHash(contentsHashBlob.writeRef());
+    DigestType contentsHash(contentsHashBlob);
 
     ComPtr<ISlangBlob> codeBlob;
 
     // Query the shader cache index for an entry with shaderKey as its key.
     auto entry = persistentShaderCache->findEntry(shaderKey, codeBlob.writeRef());
-    if (entry && contentsHash == entry->Value.contentsBasedDigest)
+    if (entry && contentsHash == entry->contentsBasedDigest)
     {
         // We found the entry in the cache, and the entry's contents are up-to-date. Nothing else needs to be done.
         shaderCacheHitCount++;
@@ -394,7 +382,7 @@ Result RendererBase::getEntryPointCodeFromShaderCache(
         }
         else
         {
-            persistentShaderCache->updateEntry(entry, shaderKey, contentsHash, codeBlob);
+            persistentShaderCache->updateEntry(shaderKey, contentsHash, codeBlob);
             shaderCacheEntryDirtyCount++;
         }
     }

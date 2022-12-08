@@ -2,7 +2,6 @@
 #include "slang-ir-inline.h"
 
 #include "slang-ir-ssa-simplification.h"
-#include "slang-ir-single-return.h"
 
 // This file provides general facilities for inlining function calls.
 
@@ -35,7 +34,7 @@ struct InliningPassBase
     {
     }
 
-        /// Consider all the call sites in the module for inliing
+        /// Consider all the call sites in the module for inlining
     bool considerAllCallSites()
     {
         return considerAllCallSitesRec(m_module->getModuleInst());
@@ -199,6 +198,9 @@ struct InliningPassBase
         //
         outCallSite.callee = calleeFunc;
 
+        if (callee->findDecoration<IRIntrinsicOpDecoration>())
+            return true;
+
         // At this point the `CallSiteInfo` is complete and
         // could be used for inlining, but we have additional
         // checks to make.
@@ -239,6 +241,27 @@ struct InliningPassBase
         SharedIRBuilder sharedBuilder(m_module);
         IRBuilder builder(sharedBuilder);
         builder.setInsertBefore(call);
+
+        // If callee is an intrinsic op, just issue that intrinsic and be done.
+        if (auto intrinsicOpDecor = callee->findDecoration<IRIntrinsicOpDecoration>())
+        {
+            List<IRInst*> args;
+            for (UInt i = 0; i < call->getArgCount(); i++)
+                args.add(call->getArg(i));
+            auto op = intrinsicOpDecor->getIntrinsicOp();
+            if (op == kIROp_Nop)
+            {
+                SLANG_RELEASE_ASSERT(call->getArgCount() >= 1);
+                call->replaceUsesWith(call->getArg(0));
+            }
+            else
+            {
+                auto newCall = builder.emitIntrinsicInst(call->getFullType(), op, args.getCount(), args.getBuffer());
+                call->replaceUsesWith(newCall);
+            }
+            call->removeAndDeallocate();
+            return;
+        }
 
         // If the callee is a generic function, then we will
         // need to include the substitution of generic parameters
@@ -318,12 +341,7 @@ struct InliningPassBase
             SLANG_ASSERT(argCounter == (Int)call->getArgCount());
         }
 
-        // For now, our inlining pass only handles the case where
-        // the callee is a "single-return" function, which means the callee
-        // function contains only one return at the end of the body.
-        
-        convertFuncToSingleReturnForm(m_module, callSite.callee);
-        inlineSingleReturnFuncBody(callSite, &env, &builder);    
+        inlineFuncBody(callSite, &env, &builder);    
     }
 
         // When instructions are cloned, with cloneInst no sourceLoc information is copied over by default.
@@ -375,19 +393,12 @@ struct InliningPassBase
         return clonedInst;
     }
 
-        /// Inline the body of the callee for `callSite`, where the callee has a single return.
-    void inlineSingleReturnFuncBody(
+        /// Inline the body of the callee for `callSite`.
+    void inlineFuncBody(
         CallSiteInfo const& callSite, IRCloneEnv* env, IRBuilder* builder)
     {
         auto call = callSite.call;
         auto callee = callSite.callee;
-
-        // We know that the callee has a single return block, so if we encounter
-        // a `returnVal` instruction then it must be the one and only
-        // return point for the function, and its operand will be the value
-        // the callee returns.
-        //
-        IRInst* returnedValue = nullptr;
 
         // Break the basic block containing the call inst into two basic blocks.
         auto callerBlock = callSite.call->getParent();
@@ -399,6 +410,13 @@ struct InliningPassBase
         // second half of the basic block right after `callerBlock`.
         afterBlock->insertAfter(callerBlock);
         afterBlock->sourceLoc = callSite.call->getNextInst()->sourceLoc;
+        // Define a param in afterBlock to receive the return value from the call.
+        builder->setInsertInto(afterBlock);
+
+        IRInst* returnValParam = nullptr;
+        if (callSite.call->getDataType()->getOp() != kIROp_VoidType)
+            returnValParam = builder->emitParam(callSite.call->getDataType());
+
         // Move all insts after the call in `callerBlock` to `afterBlock`.
         {
             auto inst = callSite.call->getNextInst();
@@ -422,8 +440,10 @@ struct InliningPassBase
 
         // Insert a branch into the cloned first block at the end of `callerBlock`.
         builder->setInsertInto(callerBlock);
-        auto newBranch = builder->emitBranch(as<IRBlock>(env->mapOldValToNew[callee->getFirstBlock()].GetValue()));
+        auto mainBlock = as<IRBlock>(env->mapOldValToNew[callee->getFirstBlock()].GetValue());
+        auto newBranch = builder->emitLoop(mainBlock, afterBlock, mainBlock);
         _setSourceLoc(newBranch, call, callSite);
+
         // Clone all basic blocks over to the call site.
         bool isFirstBlock = true;
         for (auto calleeBlock : callee->getBlocks())
@@ -464,9 +484,10 @@ struct InliningPassBase
                     // of the original call.
                     //
                     {
-                        auto returnBranch = builder->emitBranch(afterBlock);
+                        auto returnedValue = findCloneForOperand(env, inst->getOperand(0));
+                        auto returnBranch = builder->emitBranch(
+                            afterBlock, returnValParam ? 1 : 0, &returnedValue);
                         _setSourceLoc(returnBranch, inst, callSite);
-                        returnedValue = findCloneForOperand(env, inst->getOperand(0));
                     }
                     break;
                 }
@@ -478,9 +499,13 @@ struct InliningPassBase
         // the return value of the inlined function, then that value
         // should be used to replace any uses of the original call.
         //
-        if( returnedValue )
+        if (returnValParam)
         {
-            call->replaceUsesWith(returnedValue);
+            call->replaceUsesWith(returnValParam);
+        }
+        else
+        {
+            call->replaceUsesWith(builder->getVoidValue());
         }
 
         // Once we've cloned the body of the callee in at the call site,
@@ -505,6 +530,8 @@ struct MandatoryEarlyInliningPass : InliningPassBase
     {
         if(info.callee->findDecoration<IRUnsafeForceInlineEarlyDecoration>())
             return true;
+        if (info.callee->findDecoration<IRIntrinsicOpDecoration>())
+            return true;
         return false;
     }
 };
@@ -514,6 +541,96 @@ void performMandatoryEarlyInlining(IRModule* module)
 {
     MandatoryEarlyInliningPass pass(module);
     pass.considerAllCallSites();
+}
+
+namespace { // anonymous
+
+// Inlines calls that involve String types
+struct StringInliningPass : InliningPassBase
+{
+    typedef InliningPassBase Super;
+
+    StringInliningPass(IRModule* module)
+        : Super(module)
+    {}
+
+    bool doesTypeRequireInline(IRType* type)
+    {
+        // TODO(JS):
+        // I guess there is a question here about what type around string requires
+        // inlining. 
+        // For example if we had an array of strings etc.
+        // For now we just consider just basic string types.
+        const auto op = type->getOp();
+        switch (op)
+        {
+            case kIROp_StringType:
+            case kIROp_NativeStringType:
+            {
+                return true;
+            }
+            default: break;
+        }
+
+        return false;
+    }
+
+    bool shouldInline(CallSiteInfo const& info)
+    {
+        auto callee = info.callee;
+
+        if (doesTypeRequireInline(callee->getResultType()))
+        {
+            return true;
+        }
+
+        const auto count = Count(callee->getParamCount());
+        for (Index i = 0; i < count; ++i)
+        {
+            if (doesTypeRequireInline(callee->getParamType(UInt(i))))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+};
+
+} // anonymous
+
+Result performStringInlining(IRModule* module, DiagnosticSink* sink)
+{
+    SLANG_UNUSED(sink);
+
+    // TODO(JS): 
+    // This is perhaps not as efficient as might be desirable. 
+    // A more optimized version might not need to pass over all of the module
+    // to find new call sites. 
+    //
+    // Another problem here is recursion. Right now Slang compiler doesn't accept recursive input,
+    // but the Slang language is supposed to support recursion on targets that support it. 
+    // There are GPU targets that allow recursion such as CUDA.
+    //
+    // Another approach would be (when enabled) when inlining occurs, would be instead of continuing 
+    // *after*, to start the checks/inlining from where the inline took place. 
+    // 
+    while(true)
+    {
+        StringInliningPass pass(module);
+        if (pass.considerAllCallSites())
+        {
+            // If there was a change try inlining again
+            continue;
+        }
+     
+        // Done.
+        break;
+    }
+
+    
+
+    return SLANG_OK;
 }
 
 struct ForceInliningPass : InliningPassBase
@@ -527,7 +644,8 @@ struct ForceInliningPass : InliningPassBase
     bool shouldInline(CallSiteInfo const& info)
     {
         if (info.callee->findDecoration<IRForceInlineDecoration>() ||
-            info.callee->findDecoration<IRUnsafeForceInlineEarlyDecoration>())
+            info.callee->findDecoration<IRUnsafeForceInlineEarlyDecoration>()||
+            info.callee->findDecoration<IRIntrinsicOpDecoration>())
             return true;
         return false;
     }

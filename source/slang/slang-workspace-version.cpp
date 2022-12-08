@@ -51,7 +51,11 @@ void Workspace::changeDoc(const String& path, LanguageServerProtocol::Range rang
         auto endOffset = doc->getOffset(line, col);
         auto originalText = doc->getText().getUnownedSlice();
         StringBuilder newText;
-        newText << originalText.head(startOffset) << text << originalText.tail(endOffset);
+        if (startOffset != -1)
+            newText << originalText.head(startOffset);
+        newText << text;
+        if (endOffset != -1)
+            newText << originalText.tail(endOffset);
         changeDoc(doc.Ptr(), newText.ProduceString());
     }
 }
@@ -458,18 +462,23 @@ UnownedStringSlice DocumentVersion::peekIdentifier(Index& offset)
     return UnownedStringSlice("");
 }
 
-
-int DocumentVersion::getTokenLength(Index line, Index col)
+int DocumentVersion::getTokenLength(Index offset)
 {
-    auto offset = getOffset(line, col);
     if (offset >= 0)
     {
         Index pos = offset;
         for (; pos < text.getLength() && _isIdentifierChar(text[pos]); ++pos)
-        {}
+        {
+        }
         return (int)(pos - offset);
     }
     return 0;
+}
+
+int DocumentVersion::getTokenLength(Index line, Index col)
+{
+    auto offset = getOffset(line, col);
+    return getTokenLength(offset);
 }
 
 ASTMarkup* WorkspaceVersion::getOrCreateMarkupAST(ModuleDecl* module)

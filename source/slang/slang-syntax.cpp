@@ -15,16 +15,22 @@ namespace Slang
 
 void printDiagnosticArg(StringBuilder& sb, Decl* decl)
 {
+    if (!decl)
+        return;
     sb << getText(decl->getName());
 }
 
 void printDiagnosticArg(StringBuilder& sb, Type* type)
 {
+    if (!type)
+        return;
     type->toText(sb);
 }
 
 void printDiagnosticArg(StringBuilder& sb, Val* val)
 {
+    if (!val)
+        return;
     val->toText(sb);
 }
 
@@ -44,13 +50,17 @@ void printDiagnosticArg(StringBuilder& sb, QualType const& type)
         sb << "<null>";
 }
 
-SourceLoc const& getDiagnosticPos(SyntaxNode const* syntax)
+SourceLoc getDiagnosticPos(SyntaxNode const* syntax)
 {
+    if (!syntax)
+        return SourceLoc();
     return syntax->loc;
 }
 
-SourceLoc const& getDiagnosticPos(TypeExp const& typeExp)
+SourceLoc getDiagnosticPos(TypeExp const& typeExp)
 {
+    if (!typeExp.exp)
+        return SourceLoc();
     return typeExp.exp->loc;
 }
 
@@ -234,6 +244,10 @@ Index getFilterCountImpl(const ReflectClassInfo& clsInfo, MemberFilterStyle filt
         case RequirementWitness::Flavor::none:
             return RequirementWitness();
 
+        case RequirementWitness::Flavor::witnessTable:
+            SLANG_ASSERT(!subst);
+            return *this;
+
         case RequirementWitness::Flavor::declRef:
             {
                 int diff = 0;
@@ -321,16 +335,19 @@ Index getFilterCountImpl(const ReflectClassInfo& clsInfo, MemberFilterStyle filt
         }
         else if (auto transitiveTypeWitness = as<TransitiveSubtypeWitness>(subtypeWitness))
         {
-            // Hard code witness entry that `T.Differential = DifferentialBottom` for `T` that
-            // coerce to `DifferentialBottom`.
-            if (astBuilder->getDifferentialBottomType()->equals(transitiveTypeWitness->subToMid->sup))
+            if (auto declaredSubtypeWitnessMidToSup = as<DeclaredSubtypeWitness>(transitiveTypeWitness->midToSup))
             {
-                if (auto builtinAttr = requirementKey->findModifier<BuiltinRequirementModifier>())
+                auto midKey = declaredSubtypeWitnessMidToSup->declRef;
+                auto midWitness = tryLookUpRequirementWitness(astBuilder, as<SubtypeWitness>(transitiveTypeWitness->subToMid), midKey);
+                if (midWitness.getFlavor() == RequirementWitness::Flavor::witnessTable)
                 {
-                    if (builtinAttr->kind == BuiltinRequirementKind::DifferentialType)
+                    auto table = midWitness.getWitnessTable();
+                    RequirementWitness result;
+                    if (table->requirementDictionary.TryGetValue(requirementKey, result))
                     {
-                        return RequirementWitness(astBuilder->getDifferentialBottomType());
+                        result = result.specialize(astBuilder, midKey.substitutions);
                     }
+                    return result;
                 }
             }
         }
@@ -358,7 +375,6 @@ Index getFilterCountImpl(const ReflectClassInfo& clsInfo, MemberFilterStyle filt
         SLANG_ASSERT(!requirementDictionary.ContainsKey(decl));
 
         requirementDictionary.Add(decl, witness);
-        requirementList.add(KeyValuePair<Decl*, RequirementWitness>(decl, witness));
     }
 
     //
@@ -1058,6 +1074,22 @@ Index getFilterCountImpl(const ReflectClassInfo& clsInfo, MemberFilterStyle filt
         return as<IntVal>(findInnerMostGenericSubstitution(declRef.substitutions)->getArgs()[1]);
     }
 
+    // MeshOutputType
+    // There's a subtle distinction between this and HLSLPatchType, the size
+    // here is the max possible size of the array, it's free to change at
+    // runtime. There's probably no circumstance where you'd want to be generic
+    // between the two, so we don't deduplicate this code.
+
+    Type* MeshOutputType::getElementType()
+    {
+        return as<Type>(findInnerMostGenericSubstitution(declRef.substitutions)->getArgs()[0]);
+    }
+
+    IntVal* MeshOutputType::getMaxElementCount()
+    {
+        return as<IntVal>(findInnerMostGenericSubstitution(declRef.substitutions)->getArgs()[1]);
+    }
+
     // Constructors for types
 
     ArrayExpressionType* getArrayType(
@@ -1088,7 +1120,6 @@ Index getFilterCountImpl(const ReflectClassInfo& clsInfo, MemberFilterStyle filt
 
         return astBuilder->create<NamedExpressionType>(specializedDeclRef);
     }
-
     
     FuncType* getFuncType(
         ASTBuilder*                     astBuilder,
@@ -1101,7 +1132,7 @@ Index getFilterCountImpl(const ReflectClassInfo& clsInfo, MemberFilterStyle filt
         for (auto paramDeclRef : getParameters(declRef))
         {
             auto paramDecl = paramDeclRef.getDecl();
-            auto paramType = getType(astBuilder, paramDeclRef);
+            auto paramType = getParamType(astBuilder, paramDeclRef);
             if( paramDecl->findModifier<RefModifier>() )
             {
                 paramType = astBuilder->getRefType(paramType);
@@ -1146,10 +1177,10 @@ Index getFilterCountImpl(const ReflectClassInfo& clsInfo, MemberFilterStyle filt
     }
 
     ThisTypeSubstitution* findThisTypeSubstitution(
-        Substitutions*  substs,
+        const Substitutions*  substs,
         InterfaceDecl*  interfaceDecl)
     {
-        for(Substitutions* s = substs; s; s = s->outer)
+        for(const Substitutions* s = substs; s; s = s->outer)
         {
             auto thisTypeSubst = as<ThisTypeSubstitution>(s);
             if(!thisTypeSubst)
@@ -1158,7 +1189,7 @@ Index getFilterCountImpl(const ReflectClassInfo& clsInfo, MemberFilterStyle filt
             if(thisTypeSubst->interfaceDecl != interfaceDecl)
                 continue;
 
-            return thisTypeSubst;
+            return const_cast<ThisTypeSubstitution*>(thisTypeSubst);
         }
 
         return nullptr;
@@ -1213,7 +1244,7 @@ Index getFilterCountImpl(const ReflectClassInfo& clsInfo, MemberFilterStyle filt
     }
 
     // Prints a partially qualified type name with generic substitutions.
-    static void _printNestedDecl(const Substitutions* substitutions, Decl* decl, StringBuilder& out)
+    void _printNestedDecl(const Substitutions* substitutions, Decl* decl, StringBuilder& out)
     {
         // If there is a parent scope for the declaration, print it first.
         // Exclude top-level namespaces like `tu0` or `core`.
@@ -1235,12 +1266,28 @@ Index getFilterCountImpl(const ReflectClassInfo& clsInfo, MemberFilterStyle filt
                 out << ".";
             }
         }
-        
-        // Print this type's name.
-        auto name = decl->getName();
-        if (name)
+        // If we have a ThisTypeSubstitution to an interface decl, print the substituted sub
+        // type instead.
+        for (;;)
         {
-            out << name->text;
+            if (auto interfaceDecl = as<InterfaceDecl>(decl))
+            {
+                if (auto thisSubst = findThisTypeSubstitution(substitutions, interfaceDecl))
+                {
+                    if (auto subTypeWitness = as<SubtypeWitness>(thisSubst->witness))
+                    {
+                        out << subTypeWitness->sub;
+                        break;
+                    }
+                }
+            }
+            // Otherwise, just print this type's name.
+            auto name = decl->getName();
+            if (name)
+            {
+                out << name->text;
+            }
+            break;
         }
 
         // Look for generic substitutions on this type.
@@ -1257,6 +1304,9 @@ Index getFilterCountImpl(const ReflectClassInfo& clsInfo, MemberFilterStyle filt
                 bool isFirst = true;
                 for (const auto& it : genericSubstitution->getArgs())
                 {
+                    // Don't print out witnesses.
+                    if (as<Witness>(it))
+                        continue;
                     if (!isFirst)
                         out << ", ";
                     isFirst = false;
@@ -1316,6 +1366,14 @@ Module* getModule(Decl* decl)
         return nullptr;
 
     return moduleDecl->module;
+}
+
+Decl* getParentDecl(Decl* decl)
+{
+    decl = decl->parentDecl;
+    while (as<GenericDecl>(decl))
+        decl = decl->parentDecl;
+    return decl;
 }
 
 static const ImageFormatInfo kImageFormatInfos[] =

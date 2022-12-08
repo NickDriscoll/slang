@@ -83,6 +83,7 @@ interface __BuiltinType {}
 /// A type that can be used for arithmetic operations
 [sealed]
 [builtin]
+[TreatAsDifferentiable]
 interface __BuiltinArithmeticType : __BuiltinType
 {
         /// Initialize from a 32-bit signed integer value.
@@ -132,28 +133,6 @@ interface IDifferentiable
     static Differential dmul(This, Differential);
 };
 
-__magic_type(DifferentialBottomType)
-__intrinsic_type($(kIROp_DifferentialBottomType))
-struct __DifferentialBottom : IDifferentiable
-{
-    typedef __DifferentialBottom Differential;
-
-    __intrinsic_op($(kIROp_DifferentialBottomValue))
-    static __DifferentialBottom dzero();
-
-    [__unsafeForceInlineEarly]
-    static __DifferentialBottom dadd(Differential a, Differential b)
-    {
-        return dzero();
-    }
-
-    [__unsafeForceInlineEarly]
-    static __DifferentialBottom dmul(This a, Differential b)
-    {
-        return dzero();
-    }
-}
-
 /// A type that can represent non-integers
 [sealed]
 [builtin]
@@ -162,7 +141,8 @@ interface __BuiltinRealType : __BuiltinSignedArithmeticType {}
 /// A type that uses a floating-point representation
 [sealed]
 [builtin]
-interface __BuiltinFloatingPointType : __BuiltinRealType
+[TreatAsDifferentiable]
+interface __BuiltinFloatingPointType : __BuiltinRealType, IDifferentiable
 {
         /// Initialize from a 32-bit floating-point value.
     __init(float value);
@@ -223,7 +203,9 @@ extension __EnumType
     // interface, but right now the scoping for looking
     // up that type isn't working right.
     //
+    __intrinsic_op($(kIROp_IntCast))
     __init(int value);
+    __intrinsic_op($(kIROp_IntCast))
     __init(uint value);
 }
 
@@ -324,8 +306,13 @@ ${{{{
         ConversionCost conversionCost = getBaseTypeConversionCost(
             kBaseTypes[tt],
             kBaseTypes[ss]);
+
+        IROp intrinsicOpCode = getBaseTypeConversionOp(
+            kBaseTypes[tt],
+            kBaseTypes[ss]);
 }}}}
 
+    __intrinsic_op($(intrinsicOpCode))
     __implicit_conversion($(conversionCost))
     __init($(kBaseTypes[ss].name) value);
 
@@ -347,6 +334,7 @@ ${{{{
     case BaseType::UInt:
 }}}}
         __generic<T:__EnumType>
+        __intrinsic_op($(kIROp_IntCast))
         __init(T value);
 ${{{{
         break;
@@ -369,6 +357,26 @@ ${{{{
     case BaseType::Double:
 }}}}
         static $(kBaseTypes[tt].name) getPi() { return $(kBaseTypes[tt].name)(3.14159265358979323846264338328); }
+
+        typedef $(kBaseTypes[tt].name) Differential;
+    
+        [__unsafeForceInlineEarly]
+        static Differential dzero()
+        {
+            return Differential(0);
+        }
+
+        [__unsafeForceInlineEarly]
+        static Differential dadd(Differential a, Differential b)
+        {
+            return a + b;
+        }
+
+        [__unsafeForceInlineEarly]
+        static Differential dmul(Differential a, Differential b)
+        {
+            return a * b;
+        }
 ${{{{
         break;
     }
@@ -382,6 +390,7 @@ ${{{{
 }}}}
         __generic<T>
         [__readNone]
+        __intrinsic_op($(kIROp_CastToVoid))
         __init(T value)
         {}
 ${{{{
@@ -418,10 +427,10 @@ struct Ptr
     __intrinsic_op($(kIROp_BitCast))
     __init(Ptr<U> ptr);
 
-    __intrinsic_op($(kIROp_BitCast))
+    __intrinsic_op($(kIROp_CastIntToPtr))
     __init(uint64_t val);
 
-    __intrinsic_op($(kIROp_BitCast))
+    __intrinsic_op($(kIROp_CastIntToPtr))
     __init(int64_t val);
 
     __subscript(int index) -> T
@@ -438,7 +447,7 @@ struct Ptr
             __store(__getElementPtr(this, index), newValue);
         }
 
-        __intrinsic_op($(kIROp_getElementPtr))
+        __intrinsic_op($(kIROp_GetElementPtr))
         ref;
     }
 };
@@ -449,10 +458,10 @@ T __load<T>(Ptr<T> ptr);
 __intrinsic_op($(kIROp_Store))
 void __store<T>(Ptr<T> ptr, T val);
 
-__intrinsic_op($(kIROp_getElementPtr))
+__intrinsic_op($(kIROp_GetElementPtr))
 Ptr<T> __getElementPtr<T>(Ptr<T> ptr, int index);
 
-__intrinsic_op($(kIROp_getElementPtr))
+__intrinsic_op($(kIROp_GetElementPtr))
 Ptr<T> __getElementPtr<T>(Ptr<T> ptr, int64_t index);
 
 __generic<T>
@@ -493,7 +502,7 @@ extension bool
 extension uint64_t
 {
     __generic<T>
-    __intrinsic_op($(kIROp_Construct))
+    __intrinsic_op($(kIROp_CastPtrToInt))
     __init(Ptr<T> ptr);
 
     static const uint64_t maxValue = 0xFFFFFFFFFFFFFFFFULL;
@@ -503,7 +512,7 @@ extension uint64_t
 extension int64_t
 {
     __generic<T>
-    __intrinsic_op($(kIROp_Construct))
+    __intrinsic_op($(kIROp_CastPtrToInt))
     __init(Ptr<T> ptr);
 
     static const int64_t maxValue =  0x7FFFFFFFFFFFFFFFLL;
@@ -513,7 +522,7 @@ extension int64_t
 extension intptr_t
 {
     __generic<T>
-    __intrinsic_op($(kIROp_Construct))
+    __intrinsic_op($(kIROp_CastPtrToInt))
     __init(Ptr<T> ptr);
     static const intptr_t maxValue = $(SLANG_PROCESSOR_X86_64?"0x7FFFFFFFFFFFFFFFz":"0x7FFFFFFFz");
     static const intptr_t minValue = $(SLANG_PROCESSOR_X86_64?"0x8000000000000000z":"0x80000000z");
@@ -523,7 +532,7 @@ extension intptr_t
 extension uintptr_t
 {
     __generic<T>
-    __intrinsic_op($(kIROp_Construct))
+    __intrinsic_op($(kIROp_CastPtrToInt))
     __init(Ptr<T> ptr);
     static const uintptr_t maxValue = $(SLANG_PROCESSOR_X86_64?"0xFFFFFFFFFFFFFFFFz":"0xFFFFFFFFz");
     static const uintptr_t minValue = 0z;
@@ -622,16 +631,22 @@ __intrinsic_type($(kIROp_StringType))
 struct String
 {
     __target_intrinsic(cpp)
+    __intrinsic_op($(kIROp_MakeString))
     __init(int val);
     __target_intrinsic(cpp)
+    __intrinsic_op($(kIROp_MakeString))
     __init(uint val);
     __target_intrinsic(cpp)
+    __intrinsic_op($(kIROp_MakeString))
     __init(int64_t val);
     __target_intrinsic(cpp)
+    __intrinsic_op($(kIROp_MakeString))
     __init(uint64_t val);
     __target_intrinsic(cpp)
+    __intrinsic_op($(kIROp_MakeString))
     __init(float val);
     __target_intrinsic(cpp)
+    __intrinsic_op($(kIROp_MakeString))
     __init(double val);
 
     __target_intrinsic(cpp)
@@ -747,11 +762,12 @@ struct vector
 
         /// Initialize a vector where all elements have the same scalar `value`.
     __implicit_conversion($(kConversionCost_ScalarToVector))
-    __intrinsic_op($(kIROp_constructVectorFromScalar))
+    __intrinsic_op($(kIROp_MakeVectorFromScalar))
     __init(T value);
 
         /// Initialize a vector from a value of the same type
     // TODO: we should revise semantic checking so this kind of "identity" conversion is not required
+    __intrinsic_op(0)
     __init(vector<T,N> value);
 }
 
@@ -829,28 +845,93 @@ __intrinsic_type($(kIROp_ParameterBlockType))
 __magic_type(ParameterBlockType)
 struct ParameterBlock {}
 
+__generic<T, let MAX_VERTS : uint>
+__magic_type(VerticesType)
+__intrinsic_type($(kIROp_VerticesType))
+struct Vertices
+{
+    __subscript(uint index) -> T
+    {
+        // TODO: Ellie make sure these remains write only
+        __intrinsic_op($(kIROp_GetElementPtr))
+        ref;
+    }
+};
+
+__generic<T, let MAX_PRIMITIVES : uint>
+__magic_type(IndicesType)
+__intrinsic_type($(kIROp_IndicesType))
+struct Indices
+{
+    __subscript(uint index) -> T
+    {
+        // TODO: Ellie: It's illegal to not write out the whole primitive at once, should we use set over ref?
+        __intrinsic_op($(kIROp_GetElementPtr))
+        ref;
+    }
+};
+
+__generic<T, let MAX_PRIMITIVES : uint>
+__magic_type(PrimitivesType)
+__intrinsic_type($(kIROp_PrimitivesType))
+struct Primitives
+{
+    __subscript(uint index) -> T
+    {
+        __intrinsic_op($(kIROp_GetElementPtr))
+        ref;
+    }
+};
+
 //@ hidden:
 
 // Need to add constructors to the types above
 
 __generic<T> __extension vector<T, 2>
 {
+    __intrinsic_op($(kIROp_MakeVector))
     __init(T x, T y);
 }
 __generic<T> __extension vector<T, 3>
 {
+    __intrinsic_op($(kIROp_MakeVector))
     __init(T x, T y, T z);
+
+    [__unsafeForceInlineEarly]
+    __intrinsic_op($(kIROp_MakeVector))
     __init(vector<T,2> xy, T z);
+
+    [__unsafeForceInlineEarly]
+    __intrinsic_op($(kIROp_MakeVector))
     __init(T x, vector<T,2> yz);
 }
 __generic<T> __extension vector<T, 4>
 {
+    __intrinsic_op($(kIROp_MakeVector))
     __init(T x, T y, T z, T w);
+
+    [__unsafeForceInlineEarly]
+    __intrinsic_op($(kIROp_MakeVector))
     __init(vector<T,2> xy, T z, T w);
+
+    [__unsafeForceInlineEarly]
+    __intrinsic_op($(kIROp_MakeVector))
     __init(T x, vector<T,2> yz, T w);
+
+    [__unsafeForceInlineEarly]
+    __intrinsic_op($(kIROp_MakeVector))
     __init(T x, T y, vector<T,2> zw);
+
+    [__unsafeForceInlineEarly]
+    __intrinsic_op($(kIROp_MakeVector))
     __init(vector<T,2> xy, vector<T,2> zw);
+
+    [__unsafeForceInlineEarly]
+    __intrinsic_op($(kIROp_MakeVector))
     __init(vector<T,3> xyz, T w);
+
+    [__unsafeForceInlineEarly]
+    __intrinsic_op($(kIROp_MakeVector))
     __init(T x, vector<T,3> yzw);
 }
 
@@ -879,19 +960,26 @@ for (int tt = 0; tt < kBaseTypeCount; ++tt)
             auto cost = getBaseTypeConversionCost(
                 kBaseTypes[tt],
                 kBaseTypes[ff]);
+            auto op = getBaseTypeConversionOp(
+                kBaseTypes[tt],
+                kBaseTypes[ff]);
 
 			// Implicit conversion from a vector of the same
 			// size, but different element type.
             sb << "    __implicit_conversion(" << cost << ")\n";
+            sb << "    __intrinsic_op(" << int(op) << ")\n";
             sb << "    __init(vector<" << kBaseTypes[ff].name << ",N> value);\n";
 
 			// Constructor to make a vector from a scalar of another type.
-            cost += kConversionCost_ScalarToVector;
-            sb << "    __implicit_conversion(" << cost << ")\n";
-            sb << "    __init(" << kBaseTypes[ff].name << " value);\n";
+            if (cost != kConversionCost_Impossible)
+            {
+                cost += kConversionCost_ScalarToVector;
+                sb << "    __implicit_conversion(" << cost << ")\n";
+                sb << "    [__unsafeForceInlineEarly]\n";
+                sb << "    __init(" << kBaseTypes[ff].name << " value) { this = vector<" << kBaseTypes[tt].name << ",N>( " << kBaseTypes[tt].name << "(value)); }\n";
+            }
         }
     }
-
     sb << "}\n";
 }
 
@@ -901,7 +989,7 @@ for( int C = 2; C <= 4; ++C )
     sb << "__generic<T> __extension matrix<T, " << R << "," << C << ">\n{\n";
 
     // initialize from R*C scalars
-    sb << "__init(";
+    sb << "__intrinsic_op(" << int(kIROp_MakeMatrix) << ") __init(";
     for( int ii = 0; ii < R; ++ii )
     for( int jj = 0; jj < C; ++jj )
     {
@@ -911,7 +999,7 @@ for( int C = 2; C <= 4; ++C )
     sb << ");\n";
 
     // Initialize from R C-vectors
-    sb << "__init(";
+    sb << "__intrinsic_op(" << int(kIROp_MakeMatrix) << ") __init(";
     for (int ii = 0; ii < R; ++ii)
     {
         if(ii != 0) sb << ", ";
@@ -924,9 +1012,8 @@ for( int C = 2; C <= 4; ++C )
     for( int cc = C; cc <= 4; ++cc )
     {
         if(rr == R && cc == C) continue;
-        sb << "__init(matrix<T," << rr << "," << cc << "> value);\n";
+        sb << "__intrinsic_op(" << int(kIROp_MatrixReshape) << ") __init(matrix<T," << rr << "," << cc << "> value);\n";
     }
-
     sb << "}\n";
 }
 
@@ -935,6 +1022,7 @@ for (int tt = 0; tt < kBaseTypeCount; ++tt)
     if(kBaseTypes[tt].tag == BaseType::Void) continue;
     auto toType = kBaseTypes[tt].name;
 }}}}
+
 __generic<let R : int, let C : int> extension matrix<$(toType),R,C>
 {
 ${{{{
@@ -947,8 +1035,12 @@ ${{{{
             kBaseTypes[tt],
             kBaseTypes[ff]);
         auto fromType = kBaseTypes[ff].name;
+        auto op = getBaseTypeConversionOp(
+                kBaseTypes[tt],
+                kBaseTypes[ff]);
 }}}}
     __implicit_conversion($(cost))
+    __intrinsic_op($(op))
     __init(matrix<$(fromType),R,C> value);
 ${{{{
     }
@@ -957,6 +1049,61 @@ ${{{{
 ${{{{
 }
 }}}}
+
+__generic<T, U>
+__intrinsic_op(0)
+T __slang_noop_cast(U u);
+
+__generic<T:__BuiltinFloatingPointType, let N: int>
+extension vector<T, N> : IDifferentiable
+{
+    typedef vector<T, N> Differential;
+
+    [__unsafeForceInlineEarly]
+    static Differential dzero()
+    {
+        return Differential(__slang_noop_cast<T>(T.dzero()));
+    }
+
+    [__unsafeForceInlineEarly]
+    static Differential dadd(Differential a, Differential b)
+    {
+        return a + b;
+    }
+
+    [__unsafeForceInlineEarly]
+    static Differential dmul(This a, Differential b)
+    {
+        return a * b;
+    }
+}
+
+__generic<T:__BuiltinFloatingPointType, let R: int, let C: int>
+extension matrix<T, R, C> : IDifferentiable
+{
+    typedef matrix<T, R, C> Differential;
+
+    __intrinsic_op($(kIROp_MakeMatrixFromScalar))
+    __init(T val);
+
+    [__unsafeForceInlineEarly]
+    static Differential dzero()
+    {
+        return matrix<T, R, C>(__slang_noop_cast<T>(T.dzero()));
+    }
+
+    [__unsafeForceInlineEarly]
+    static Differential dadd(Differential a, Differential b)
+    {
+        return a + b;
+    }
+
+    [__unsafeForceInlineEarly]
+    static Differential dmul(This a, Differential b)
+    {
+        return a * b;
+    }
+}
 
 //@ public:
 
@@ -1980,7 +2127,7 @@ __intrinsic_op(0)
 __prefix Ptr<T> operator&(__ref T value);
 
 __generic<T>
-__intrinsic_op($(kIROp_getElementPtr))
+__intrinsic_op($(kIROp_GetElementPtr))
 Ptr<T> operator+(Ptr<T> value, int64_t offset);
 
 __generic<T>
@@ -2436,6 +2583,10 @@ interface IComparable
     bool lessThanOrEquals(This other);
 }
 
+__attributeTarget(DeclBase)
+attribute_syntax [TreatAsDifferentiable] : TreatAsDifferentiableAttribute;
+
+[TreatAsDifferentiable]
 interface IArithmetic : IComparable
 {
     This add(This other);
@@ -2732,6 +2883,9 @@ __attributeTarget(VarDeclBase)
 attribute_syntax [__vulkanCallablePayload(location : int = -1)] : VulkanCallablePayloadAttribute;
 
 __attributeTarget(VarDeclBase)
+attribute_syntax [__vulkanHitObjectAttributes(location : int = -1)] : VulkanHitObjectAttributesAttribute;
+
+__attributeTarget(VarDeclBase)
 attribute_syntax [__vulkanHitAttributes] : VulkanHitAttributesAttribute;
 
 __attributeTarget(FunctionDeclBase)
@@ -2792,9 +2946,6 @@ attribute_syntax [anyValueSize(size:int)] : AnyValueSizeAttribute;
 
 __attributeTarget(InterfaceDecl)
 attribute_syntax [Specialize] : SpecializeAttribute;
-
-__attributeTarget(DeclBase)
-attribute_syntax [DerivativeMember(memberName)] : DerivativeMemberAttribute;
 
 __attributeTarget(DeclBase)
 attribute_syntax [builtin] : BuiltinAttribute;

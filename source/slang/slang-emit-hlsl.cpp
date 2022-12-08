@@ -313,9 +313,7 @@ void HLSLSourceEmitter::emitEntryPointAttributesImpl(IRFunc* irFunc, IREntryPoin
         }
     }
 
-    switch (stage)
-    {
-        case Stage::Compute:
+    auto emitNumThreadsAttribute = [&]()
         {
             Int sizeAlongAxis[kThreadGroupAxisCount];
             getComputeThreadGroupSize(irFunc, sizeAlongAxis);
@@ -327,6 +325,13 @@ void HLSLSourceEmitter::emitEntryPointAttributesImpl(IRFunc* irFunc, IREntryPoin
                 m_writer->emit(sizeAlongAxis[ii]);
             }
             m_writer->emit(")]\n");
+        };
+
+    switch (stage)
+    {
+        case Stage::Compute:
+        {
+            emitNumThreadsAttribute();
         }
         break;
         case Stage::Geometry:
@@ -406,6 +411,18 @@ void HLSLSourceEmitter::emitEntryPointAttributesImpl(IRFunc* irFunc, IREntryPoin
             }
             break;
         }
+        case Stage::Mesh:
+        {
+            emitNumThreadsAttribute();
+            if (auto decor = irFunc->findDecoration<IROutputTopologyDecoration>())
+            {
+                // TODO: Ellie validate here/elsewhere, what's allowed here is
+                // different from the tesselator
+                // The naming here is plural, so add an 's'
+                _emitHLSLDecorationSingleString("outputtopology", irFunc, decor->getTopology());
+            }
+            break;
+        }
         // TODO: There are other stages that will need this kind of handling.
         default:
             break;
@@ -416,8 +433,7 @@ bool HLSLSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inOu
 {
     switch (inst->getOp())
     {
-        case kIROp_Construct:
-        case kIROp_makeVector:
+        case kIROp_MakeVector:
         case kIROp_MakeMatrix:
         {
             if (inst->getOperandCount() == 1)
@@ -546,13 +562,6 @@ bool HLSLSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inOu
             StringEscapeUtil::appendQuoted(handler, slice, buf);
 
             m_writer->emit(buf);
-
-            return true;
-        }
-        case kIROp_GetStringHash:
-        {
-            const UnownedStringSlice slice = as<IRStringLit>(inst->getOperand(0))->getStringSlice();
-            m_writer->emit(static_cast<int32_t>(getStableHashCode32(slice.begin(), slice.getLength())));
 
             return true;
         }
@@ -1052,6 +1061,7 @@ void HLSLSourceEmitter::_emitPrefixTypeAttr(IRAttr* attr)
 void HLSLSourceEmitter::emitSimpleFuncParamImpl(IRParam* param)
 {
     emitRateQualifiers(param);
+    emitMeshOutputModifiers(param);
 
     if (auto decor = param->findDecoration<IRGeometryInputPrimitiveTypeDecoration>())
     {
@@ -1101,6 +1111,20 @@ void HLSLSourceEmitter::emitInterpolationModifiersImpl(IRInst* varInst, IRType* 
             m_writer->emit(modeText);
             m_writer->emitChar(' ');
         }
+    }
+}
+
+void HLSLSourceEmitter::emitMeshOutputModifiersImpl(IRInst* varInst)
+{
+    if(auto modifier = varInst->findDecoration<IRMeshOutputDecoration>())
+    {
+        const char* s =
+              as<IRVerticesDecoration>(modifier)   ? "vertices "
+            : as<IRIndicesDecoration>(modifier)    ? "indices "
+            : as<IRPrimitivesDecoration>(modifier) ? "primitives "
+            : nullptr;
+        SLANG_EXPECT(s, "Unhandled type of mesh output decoration");
+        m_writer->emit(s);
     }
 }
 

@@ -95,6 +95,19 @@ struct IRTargetIntrinsicDecoration : IRTargetSpecificDecoration
     }
 };
 
+struct IRIntrinsicOpDecoration : IRDecoration
+{
+    enum { kOp = kIROp_IntrinsicOpDecoration };
+    IR_LEAF_ISA(IntrinsicOpDecoration)
+
+    IRIntLit* getIntrinsicOpOperand() { return cast<IRIntLit>(getOperand(0)); }
+
+    IROp getIntrinsicOp()
+    {
+        return (IROp)getIntrinsicOpOperand()->getValue();
+    }
+};
+
 struct IRGLSLOuterArrayDecoration : IRDecoration
 {
     enum { kOp = kIROp_GLSLOuterArrayDecoration };
@@ -239,6 +252,11 @@ IR_SIMPLE_DECORATION(VulkanCallablePayloadDecoration)
 /// to it.
 IR_SIMPLE_DECORATION(VulkanHitAttributesDecoration)
 
+/// A decoration that indicates that a variable represents
+/// vulkan hit object attributes, and should have a location assigned
+/// to it.
+IR_SIMPLE_DECORATION(VulkanHitObjectAttributesDecoration)
+
 struct IRRequireGLSLVersionDecoration : IRDecoration
 {
     enum { kOp = kIROp_RequireGLSLVersionDecoration };
@@ -328,6 +346,7 @@ struct IROutputControlPointsDecoration : IRDecoration
     IRIntLit* getControlPointCount() { return cast<IRIntLit>(getOperand(0)); }
 };
 
+// This is used for mesh shaders too
 struct IROutputTopologyDecoration : IRDecoration
 {
     enum { kOp = kIROp_OutputTopologyDecoration };
@@ -566,6 +585,49 @@ struct IRForwardDerivativeDecoration : IRDecoration
     IRInst* getForwardDerivativeFunc() { return getOperand(0); }
 };
 
+
+struct IRBackwardDerivativeDecoration : IRDecoration
+{
+    enum
+    {
+        kOp = kIROp_BackwardDerivativeDecoration
+    };
+    IR_LEAF_ISA(BackwardDerivativeDecoration)
+
+    IRInst* getBackwardDerivativeFunc() { return getOperand(0); }
+};
+
+struct IRDifferentialInstDecoration : IRDecoration
+{
+    enum
+    {
+        kOp = kIROp_DifferentialInstDecoration
+    };
+
+    IRUse primalType;
+    IR_LEAF_ISA(DifferentialInstDecoration)
+
+    IRType* getPrimalType() { return as<IRType>(getOperand(0)); }
+};
+
+struct IRBackwardDifferentiableDecoration : IRDecoration
+{
+    enum
+    {
+        kOp = kIROp_BackwardDifferentiableDecoration
+    };
+    IR_LEAF_ISA(BackwardDifferentiableDecoration)
+};
+
+struct IRTreatAsDifferentiableDecoration : IRDecoration
+{
+    enum
+    {
+        kOp = kIROp_TreatAsDifferentiableDecoration
+    };
+    IR_LEAF_ISA(TreatAsDifferentiableDecoration)
+};
+
 struct IRDerivativeMemberDecoration : IRDecoration
 {
     enum
@@ -592,6 +654,21 @@ struct IRForwardDifferentiate : IRInst
     IR_LEAF_ISA(ForwardDifferentiate)
 };
 
+// An instruction that replaces the function symbol
+// with it's derivative function.
+struct IRBackwardDifferentiate : IRInst
+{
+    enum
+    {
+        kOp = kIROp_BackwardDifferentiate
+    };
+    // The base function for the call.
+    IRUse base;
+    IRInst* getBaseFn() { return getOperand(0); }
+
+    IR_LEAF_ISA(BackwardDifferentiate)
+};
+
 // Dictionary item mapping a type with a corresponding 
 // IDifferentiable witness table
 // 
@@ -608,6 +685,25 @@ struct IRDifferentiableTypeDictionaryDecoration : IRDecoration
     IR_LEAF_ISA(DifferentiableTypeDictionaryDecoration)
 };
 
+struct IRDifferentiableMethodRequirementDictionaryDecoration : IRDecoration
+{
+    IR_LEAF_ISA(DifferentiableMethodRequirementDictionaryDecoration)
+};
+
+struct IRDifferentiableMethodRequirementDictionaryItem : IRInst
+{
+    IR_PARENT_ISA(DifferentiableMethodRequirementDictionaryItem)
+};
+
+struct IRForwardDifferentiableMethodRequirementDictionaryItem : IRDifferentiableMethodRequirementDictionaryItem
+{
+    IR_LEAF_ISA(ForwardDifferentiableMethodRequirementDictionaryItem)
+};
+
+struct IRBackwardDifferentiableMethodRequirementDictionaryItem : IRDifferentiableMethodRequirementDictionaryItem
+{
+    IR_LEAF_ISA(BackwardDifferentiableMethodRequirementDictionaryItem)
+};
 
 // An instruction that specializes another IR value
 // (representing a generic) to a particular set of generic arguments 
@@ -637,7 +733,7 @@ struct IRLookupWitnessMethod : IRInst
     IRInst* getWitnessTable() { return witnessTable.get(); }
     IRInst* getRequirementKey() { return requirementKey.get(); }
 
-    IR_LEAF_ISA(lookup_interface_method)
+    IR_LEAF_ISA(LookupWitness)
 };
 
 // Returns the sequential ID of an RTTI object.
@@ -725,6 +821,42 @@ struct IRPayloadDecoration : public IRDecoration
     IR_LEAF_ISA(PayloadDecoration)
 };
 
+// Mesh shader decorations
+
+struct IRMeshOutputDecoration : public IRDecoration
+{
+    IR_PARENT_ISA(MeshOutputDecoration)
+    IRIntLit* getMaxSize() { return cast<IRIntLit>(getOperand(0)); }
+};
+
+struct IRVerticesDecoration : public IRMeshOutputDecoration
+{
+    IR_LEAF_ISA(VerticesDecoration)
+};
+
+struct IRIndicesDecoration : public IRMeshOutputDecoration
+{
+    IR_LEAF_ISA(IndicesDecoration)
+};
+
+struct IRPrimitivesDecoration : public IRMeshOutputDecoration
+{
+    IR_LEAF_ISA(PrimitivesDecoration)
+};
+
+struct IRGLSLPrimitivesRateDecoration : public IRDecoration
+{
+    IR_LEAF_ISA(GLSLPrimitivesRateDecoration)
+};
+
+struct IRMeshOutputRef : public IRInst
+{
+    enum { kOp = kIROp_MeshOutputRef };
+    IR_LEAF_ISA(MeshOutputRef)
+    IRInst* getIndex() { return getOperand(1); }
+    IRInst* getOutputType() { return cast<IRPtrTypeBase>(getFullType())->getValueType(); }
+};
+
     /// An attribute that can be attached to another instruction as an operand.
     ///
     /// Attributes serve a similar role to decorations, in that both are ways
@@ -789,6 +921,11 @@ struct IRFuncThrowTypeAttr : IRAttr
     IR_LEAF_ISA(FuncThrowTypeAttr)
 
     IRType* getErrorType() { return (IRType*)getOperand(0); }
+};
+
+struct IRNoDiffAttr : IRAttr
+{
+    IR_LEAF_ISA(NoDiffAttr)
 };
 
     /// An attribute that specifies size information for a single resource kind.
@@ -1480,14 +1617,14 @@ struct IRFieldAddress : IRInst
 
 struct IRGetElement : IRInst
 {
-    IR_LEAF_ISA(getElement);
+    IR_LEAF_ISA(GetElement);
     IRInst* getBase() { return getOperand(0); }
     IRInst* getIndex() { return getOperand(1); }
 };
 
 struct IRGetElementPtr : IRInst
 {
-    IR_LEAF_ISA(getElementPtr);
+    IR_LEAF_ISA(GetElementPtr);
     IRInst* getBase() { return getOperand(0); }
     IRInst* getIndex() { return getOperand(1); }
 };
@@ -1506,7 +1643,7 @@ struct IRGetManagedPtrWriteRef : IRInst
 
 struct IRGetAddress : IRInst
 {
-    IR_LEAF_ISA(getAddr);
+    IR_LEAF_ISA(GetAddr);
 };
 
 struct IRImageSubscript : IRInst
@@ -2222,6 +2359,8 @@ public:
 
     void setInsertInto(IRInst* insertInto) { setInsertLoc(IRInsertLoc::atEnd(insertInto)); }
     void setInsertBefore(IRInst* insertBefore) { setInsertLoc(IRInsertLoc::before(insertBefore)); }
+    // TODO: Ellie, contrary to IRInsertLoc::after, this inserts instructions in the order they are emitted, should it have a better name (setInsertBeforeNext)?
+    void setInsertAfter(IRInst* insertAfter);
 
     void setInsertInto(IRModule* module) { setInsertInto(module->getModuleInst()); }
 
@@ -2331,7 +2470,6 @@ public:
     IRAnyValueType* getAnyValueType(IRIntegerValue size);
     IRAnyValueType* getAnyValueType(IRInst* size);
     IRDynamicType* getDynamicType();
-    IRDifferentialBottomType* getDifferentialBottomType();
 
     IRTupleType* getTupleType(UInt count, IRType* const* types);
     IRTupleType* getTupleType(List<IRType*> const& types)
@@ -2409,6 +2547,8 @@ public:
 
     IRConstantBufferType* getConstantBufferType(
         IRType* elementType);
+
+    IRGLSLOutputParameterGroupType* getGLSLOutputParameterGroupType(IRType* valueType);
 
     IRConstExprRate* getConstExprRate();
     IRGroupSharedRate* getGroupSharedRate();
@@ -2497,6 +2637,7 @@ public:
         IRInst* existentialValue);
 
     IRInst* emitForwardDifferentiateInst(IRType* type, IRInst* baseFn);
+    IRInst* emitBackwardDifferentiateInst(IRType* type, IRInst* baseFn);
 
     IRInst* emitMakeDifferentialPair(IRType* type, IRInst* primal, IRInst* differential);
 
@@ -2558,10 +2699,16 @@ public:
         UInt            argCount,
         IRInst* const*  args);
 
-    IRInst* emitConstructorInst(
-        IRType*         type,
-        UInt            argCount,
-        IRInst* const* args);
+        /// Emits appropriate inst for constructing a default value of `type`.
+        /// If `fallback` is true, will emit `DefaultConstruct` inst on unknown types.
+        /// Otherwise, returns nullptr if we can't materialize the inst.
+    IRInst* emitDefaultConstruct(IRType* type, bool fallback = true);
+
+    IRInst* emitCast(
+        IRType* type,
+        IRInst* value);
+
+    IRInst* emitVectorReshape(IRType* type, IRInst* value);
 
     IRInst* emitMakeUInt64(IRInst* low, IRInst* high);
 
@@ -2604,6 +2751,8 @@ public:
     IRInst* emitMakeOptionalNone(IRInst* optType, IRInst* defaultValue);
     IRInst* emitDifferentialPairGetDifferential(IRType* diffType, IRInst* diffPair);
     IRInst* emitDifferentialPairGetPrimal(IRInst* diffPair);
+    IRInst* emitDifferentialPairAddressDifferential(IRType* diffType, IRInst* diffPair);
+    IRInst* emitDifferentialPairAddressPrimal(IRInst* diffPair);
     IRInst* emitMakeVector(
         IRType*         type,
         UInt            argCount,
@@ -2999,6 +3148,7 @@ public:
     IRInst* emitBitAnd(IRType* type, IRInst* left, IRInst* right);
     IRInst* emitBitOr(IRType* type, IRInst* left, IRInst* right);
     IRInst* emitBitNot(IRType* type, IRInst* value);
+    IRInst* emitNeg(IRType* type, IRInst* value);
 
     IRInst* emitAdd(IRType* type, IRInst* left, IRInst* right);
     IRInst* emitSub(IRType* type, IRInst* left, IRInst* right);
@@ -3207,9 +3357,29 @@ public:
         addDecoration(value, kIROp_ForwardDifferentiableDecoration);
     }
 
-    void addForwardDerivativeDecoration(IRInst* value, IRInst* jvpFn)
+    void addBackwardDifferentiableDecoration(IRInst* value)
     {
-        addDecoration(value, kIROp_ForwardDerivativeDecoration, jvpFn);
+        addDecoration(value, kIROp_BackwardDifferentiableDecoration);
+    }
+
+    void addForwardDerivativeDecoration(IRInst* value, IRInst* fwdFunc)
+    {
+        addDecoration(value, kIROp_ForwardDerivativeDecoration, fwdFunc);
+    }
+
+    void addBackwardDerivativeDecoration(IRInst* value, IRInst* jvpFn)
+    {
+        addDecoration(value, kIROp_BackwardDerivativeDecoration, jvpFn);
+    }
+
+    void markInstAsDifferential(IRInst* value)
+    {
+        addDecoration(value, kIROp_DifferentialInstDecoration, nullptr);
+    }
+
+    void markInstAsDifferential(IRInst* value, IRType* primalType)
+    {
+        addDecoration(value, kIROp_DifferentialInstDecoration, primalType);
     }
 
     void addCOMWitnessDecoration(IRInst* value, IRInst* witnessTable)
@@ -3321,6 +3491,18 @@ public:
     {
         addDecoration(inst, kIROp_VulkanCallablePayloadDecoration, getIntValue(getIntType(), location));
     }
+
+    void addVulkanHitObjectAttributesDecoration(IRInst* inst, int location)
+    {
+        addDecoration(inst, kIROp_VulkanHitObjectAttributesDecoration, getIntValue(getIntType(), location));
+    }
+
+    void addMeshOutputDecoration(IROp d, IRInst* value, IRInst* maxCount)
+    {
+        SLANG_ASSERT(IRMeshOutputDecoration::isaImpl(d));
+        // TODO: Ellie, correct int type here?
+        addDecoration(value, d, maxCount);
+    }
 };
 
 void addHoistableInst(
@@ -3350,6 +3532,20 @@ struct IRBuilderSourceLocRAII
     {
         SLANG_ASSERT(builder->getSourceLocInfo() == this);
         builder->setSourceLocInfo(next);
+    }
+};
+
+// A helper to restore the builder's insert location on destruction
+struct IRBuilderInsertLocScope
+{
+    IRBuilder* builder;
+    IRInsertLoc insertLoc;
+    IRBuilderInsertLocScope(IRBuilder* b)
+        : builder(b), insertLoc(builder->getInsertLoc())
+    {}
+    ~IRBuilderInsertLocScope()
+    {
+        builder->setInsertLoc(insertLoc);
     }
 };
 

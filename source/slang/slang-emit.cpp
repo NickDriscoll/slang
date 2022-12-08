@@ -11,7 +11,7 @@
 #include "slang-ir-cleanup-void.h"
 #include "slang-ir-dce.h"
 #include "slang-ir-diff-call.h"
-#include "slang-ir-diff-jvp.h"
+#include "slang-ir-autodiff.h"
 #include "slang-ir-dll-export.h"
 #include "slang-ir-dll-import.h"
 #include "slang-ir-eliminate-phis.h"
@@ -24,6 +24,7 @@
 #include "slang-ir-insts.h"
 #include "slang-ir-inline.h"
 #include "slang-ir-legalize-array-return-type.h"
+#include "slang-ir-legalize-mesh-outputs.h"
 #include "slang-ir-legalize-varying-params.h"
 #include "slang-ir-link.h"
 #include "slang-ir-com-interface.h"
@@ -52,6 +53,8 @@
 #include "slang-ir-wrap-structured-buffers.h"
 #include "slang-ir-liveness.h"
 #include "slang-ir-glsl-liveness.h"
+#include "slang-ir-string-hash.h"
+
 #include "slang-legalize-types.h"
 #include "slang-lower-to-ir.h"
 #include "slang-mangle.h"
@@ -357,39 +360,54 @@ Result linkAndOptimizeIR(
     // perform specialization of functions based on parameter
     // values that need to be compile-time constants.
     //
-    dumpIRIfEnabled(codeGenContext, irModule, "BEFORE-SPECIALIZE");
-    if (!codeGenContext->isSpecializationDisabled())
-        specializeModule(irModule);
-    dumpIRIfEnabled(codeGenContext, irModule, "AFTER-SPECIALIZE");
+    // Specialization passes and auto-diff passes runs in an iterative loop
+    // since each pass can enable the other pass to progress further.
+    for (;;)
+    {
+        bool changed = false;
 
-    applySparseConditionalConstantPropagation(irModule);
-    eliminateDeadCode(irModule);
+        dumpIRIfEnabled(codeGenContext, irModule, "BEFORE-SPECIALIZE");
+        if (!codeGenContext->isSpecializationDisabled())
+            changed |= specializeModule(irModule);
+        dumpIRIfEnabled(codeGenContext, irModule, "AFTER-SPECIALIZE");
+
+        validateIRModuleIfEnabled(codeGenContext, irModule);
+    
+        // Inline calls to any functions marked with [__unsafeInlineEarly] again,
+        // since we may be missing out cases prevented by the functions that we just specialzied.
+        performMandatoryEarlyInlining(irModule);
+
+        dumpIRIfEnabled(codeGenContext, irModule, "BEFORE-AUTODIFF");
+        changed |= processAutodiffCalls(irModule, sink);
+        dumpIRIfEnabled(codeGenContext, irModule, "AFTER-AUTODIFF");
+
+        if (!changed)
+            break;
+    }
+
+    finalizeAutoDiffPass(irModule);
+
+    // If we have a target that is GPU like we use the string hashing mechanism
+    // but for that to work we need to inline such that calls (or returns) of strings
+    // boil down into getStringHash(stringLiteral)
+    if (!ArtifactDescUtil::isCpuLikeTarget(artifactDesc))
+    {
+        // We could fail because
+        // 1) It's not inlinable for some reason (for example if it's recursive)
+        SLANG_RETURN_ON_FAIL(performStringInlining(irModule, sink));
+    }
 
     lowerReinterpret(targetRequest, irModule, sink);
 
     validateIRModuleIfEnabled(codeGenContext, irModule);
-    
-    // Inline calls to any functions marked with [__unsafeInlineEarly] again,
-    // since we may be missing out cases prevented by the functions that we just specialzied.
-    performMandatoryEarlyInlining(irModule);
 
-    dumpIRIfEnabled(codeGenContext, irModule, "BEFORE-AUTODIFF");
-    
-    // Process higher-order calles to auto-diff passes.
-    // 1. Generate JVP code wherever necessary. (Linearization or "forward-mode" pass)
-    processForwardDifferentiableFuncs(irModule, sink);
+    simplifyIR(irModule);
 
-    // 2. Transpose JVP to VJP code wherever needed. (Transposition or "reverse-mode" pass)
-    // processVJPDerivativeMarkers(module); // Disabled currently. No impl yet.
-
-    stripAutoDiffDecorations(irModule);
-
-    dumpIRIfEnabled(codeGenContext, irModule, "AFTER-AUTODIFF");
-
-    validateIRModuleIfEnabled(codeGenContext, irModule);
-
-    applySparseConditionalConstantPropagation(irModule);
-    eliminateDeadCode(irModule);
+    if (!ArtifactDescUtil::isCpuLikeTarget(artifactDesc))
+    {
+        // We could fail because (perhaps, somehow) end up with getStringHash that the operand is not a string literal
+        SLANG_RETURN_ON_FAIL(checkGetStringHashInsts(irModule, sink));
+    }
 
     // For targets that supports dynamic dispatch, we need to lower the
     // generics / interface types to ordinary functions and types using
@@ -400,8 +418,6 @@ Result linkAndOptimizeIR(
 
     if (sink->getErrorCount() != 0)
         return SLANG_FAIL;
-
-    eliminateMultiLevelBreak(irModule);
 
     // TODO(DG): There are multiple DCE steps here, which need to be changed
     //   so that they don't just throw out any non-entry point code
@@ -686,7 +702,7 @@ Result linkAndOptimizeIR(
             session,
             irModule,
             irEntryPoints,
-            codeGenContext->getSink(),
+            codeGenContext,
             glslExtensionTracker);
 
 #if 0
@@ -780,6 +796,13 @@ Result linkAndOptimizeIR(
 
     cleanUpVoidType(irModule);
 
+    // For some small improvement in type safety we represent these as opaque
+    // structs instead of regular arrays.
+    //
+    // If any have survived this far, change them back to regular (decorated)
+    // arrays that the emitters can deal with.
+    legalizeMeshOutputTypes(irModule);
+
     // Lower all bit_cast operations on complex types into leaf-level
     // bit_cast on basic types.
     lowerBitCast(targetRequest, irModule);
@@ -803,6 +826,8 @@ Result linkAndOptimizeIR(
         {
             LivenessUtil::addVariableRangeStarts(irModule, livenessMode);
         }
+
+        eliminateMultiLevelBreak(irModule);
 
         // As a late step, we need to take the SSA-form IR and move things *out*
         // of SSA form, by eliminating all "phi nodes" (block parameters) and

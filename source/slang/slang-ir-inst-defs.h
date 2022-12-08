@@ -60,7 +60,6 @@ INST(Nop, nop, 0, 0)
     INST(OptionalType, Optional, 1, 0)
 
     INST(DifferentialPairType, DiffPair, 1, 0)
-    INST(DifferentialBottomType, DiffBottomType, 0, 0)
 
     /* BindExistentialsTypeBase */
 
@@ -163,6 +162,12 @@ INST(Nop, nop, 0, 0)
             INST(HLSLLineStreamType,        LineStream,     1, 0)
             INST(HLSLTriangleStreamType,    TriangleStream, 1, 0)
         INST_RANGE(HLSLStreamOutputType, HLSLPointStreamType, HLSLTriangleStreamType)
+
+        /* MeshOutputType */
+            INST(VerticesType,   Vertices, 2, 0)
+            INST(IndicesType,    Indices,  2, 0)
+            INST(PrimitivesType, Primitives, 2, 0)
+        INST_RANGE(MeshOutputType, VerticesType, PrimitivesType)
 
         /* HLSLStructuredBufferTypeBase */
             INST(HLSLStructuredBufferType,                  StructuredBuffer,                   0, 0)
@@ -274,18 +279,20 @@ INST(DifferentialPairGetDifferential, GetDifferential, 1, 0)
 INST(DifferentialPairGetPrimal, GetPrimal, 1, 0)
 
 INST(Specialize, specialize, 2, 0)
-INST(lookup_interface_method, lookup_interface_method, 2, 0)
+INST(LookupWitness, lookupWitness, 2, 0)
 INST(GetSequentialID, GetSequentialID, 1, 0)
 INST(lookup_witness_table, lookup_witness_table, 2, 0)
 INST(BindGlobalGenericParam, bind_global_generic_param, 2, 0)
-INST(Construct, construct, 0, 0)
 INST(AllocObj, allocObj, 0, 0)
 
-INST(makeUInt64, makeUInt64, 2, 0)
-INST(makeVector, makeVector, 0, 0)
+INST(MakeUInt64, makeUInt64, 2, 0)
+INST(MakeVector, makeVector, 0, 0)
 INST(MakeMatrix, makeMatrix, 0, 0)
-INST(makeArray, makeArray, 0, 0)
-INST(makeStruct, makeStruct, 0, 0)
+INST(MakeMatrixFromScalar, makeMatrixFromScalar, 1, 0)
+INST(MatrixReshape, matrixReshape, 1, 0)
+INST(VectorReshape, vectorReshape, 1, 0)
+INST(MakeArray, makeArray, 0, 0)
+INST(MakeStruct, makeStruct, 0, 0)
 INST(MakeTuple, makeTuple, 0, 0)
 INST(GetTupleElement, getTupleElement, 2, 0)
 INST(MakeResultValue, makeResultValue, 1, 0)
@@ -319,15 +326,15 @@ INST(Store, store, 2, 0)
 INST(FieldExtract, get_field, 2, 0)
 INST(FieldAddress, get_field_addr, 2, 0)
 
-INST(getElement, getElement, 2, 0)
-INST(getElementPtr, getElementPtr, 2, 0)
-INST(getAddr, getAddr, 1, 0)
+INST(GetElement, getElement, 2, 0)
+INST(GetElementPtr, getElementPtr, 2, 0)
+INST(GetAddr, getAddr, 1, 0)
 
 // Get an unowned NativeString from a String.
 INST(getNativeStr, getNativeStr, 1, 0)
 
 // Make String from a NativeString.
-INST(makeString, makeString, 1, 0)
+INST(MakeString, makeString, 1, 0)
 
 // Get a native ptr from a ComPtr or RefPtr
 INST(GetNativePtr, getNativePtr, 1, 0)
@@ -393,9 +400,11 @@ INST(StructuredBufferLoad, structuredBufferLoad, 2, 0)
 //
 INST(StructuredBufferStore, structuredBufferStore, 3, 0)
 
+INST(MeshOutputRef, meshOutputRef, 2, 0)
+
 // Construct a vector from a scalar
 //
-// %dst = constructVectorFromScalar %T %N %val
+// %dst = MakeVectorFromScalar %T %N %val
 //
 // where
 // - `T` is a `Type`
@@ -403,7 +412,7 @@ INST(StructuredBufferStore, structuredBufferStore, 3, 0)
 // - `val` is a `T`
 // - dst is a `Vec<T,N>`
 //
-INST(constructVectorFromScalar, constructVectorFromScalar, 3, 0)
+INST(MakeVectorFromScalar, MakeVectorFromScalar, 3, 0)
 
 // A swizzle of a vector:
 //
@@ -570,6 +579,7 @@ INST(GetOptiXSbtDataPtr, getOptiXSbtDataPointer, 0, 0)
 INST(HighLevelDeclDecoration,               highLevelDecl,          1, 0)
     INST(LayoutDecoration,                  layout,                 1, 0)
     INST(LoopControlDecoration,             loopControl,            1, 0)
+    INST(IntrinsicOpDecoration, intrinsicOp, 1, 0)
     /* TargetSpecificDecoration */
         INST(TargetDecoration,              target,                 1, 0)
         INST(TargetIntrinsicDecoration,     targetIntrinsic,        2, 0)
@@ -586,6 +596,8 @@ INST(HighLevelDeclDecoration,               highLevelDecl,          1, 0)
 
     INST(VulkanRayPayloadDecoration,        vulkanRayPayload,       0, 0)
     INST(VulkanHitAttributesDecoration,     vulkanHitAttributes,    0, 0)
+    INST(VulkanHitObjectAttributesDecoration, vulkanHitObjectAttributes, 0, 0)
+
     INST(RequireSPIRVVersionDecoration,     requireSPIRVVersion,    1, 0)
     INST(RequireGLSLVersionDecoration,      requireGLSLVersion,     1, 0)
     INST(RequireGLSLExtensionDecoration,    requireGLSLExtension,   1, 0)
@@ -691,6 +703,13 @@ INST(HighLevelDeclDecoration,               highLevelDecl,          1, 0)
 
     INST(PayloadDecoration, payload, 0, 0)
 
+    /* Mesh Shader outputs */
+        INST(VerticesDecoration, vertices, 1, 0)
+        INST(IndicesDecoration, indices, 1, 0)
+        INST(PrimitivesDecoration, primitives, 1, 0)
+    INST_RANGE(MeshOutputDecoration, VerticesDecoration, PrimitivesDecoration)
+    INST(GLSLPrimitivesRateDecoration, perprimitive, 0, 0)
+
     /* StageAccessDecoration */
         INST(StageReadAccessDecoration, stageReadAccess, 0, 0)
         INST(StageWriteAccessDecoration, stageWriteAccess, 0, 0)
@@ -705,11 +724,25 @@ INST(HighLevelDeclDecoration,               highLevelDecl,          1, 0)
 
         /// Used by the auto-diff pass to hold a reference to the
         /// generated derivative function.
-    INST(ForwardDerivativeDecoration, jvpFnReference, 1, 0)
+    INST(ForwardDerivativeDecoration, fwdDerivative, 1, 0)
+
+        /// Used by the auto-diff pass to hold a reference to the
+        /// generated derivative function.
+    INST(BackwardDifferentiableDecoration, backwardDifferentiable, 1, 0)
+
+        /// Decorated function is marked for the reverse-mode differentiation pass.
+    INST(BackwardDerivativeDecoration, backwardDiffReference, 1, 0)
+
+        /// Used by the auto-diff pass to mark insts that compute
+        /// a differential value.
+    INST(DifferentialInstDecoration, diffInstDecoration, 1, 0)
 
         /// Used by the auto-diff pass to hold a reference to a
         /// differential member of a type in its associated differential type.
     INST(DerivativeMemberDecoration, derivativeMemberDecoration, 1, 0)
+
+        /// Treat a function as differentiable function, or an IRCall as a call to a differentiable function.
+    INST(TreatAsDifferentiableDecoration, treatAsDifferentiableDecoration, 0, 0)
 
         /// Marks a class type as a COM interface implementation, which enables
         /// the witness table to be easily picked up by emit.
@@ -717,6 +750,9 @@ INST(HighLevelDeclDecoration,               highLevelDecl,          1, 0)
 
     /* Differentiable Type Dictionary */
     INST(DifferentiableTypeDictionaryDecoration, DifferentiableTypeDictionaryDecoration, 0, PARENT)
+
+        /// Decorates an interface type and stores the mapping from a normal function requirement key to its derivative requirement key.
+    INST(DifferentiableMethodRequirementDictionaryDecoration, DifferentiableMethodRequirementDictionaryDecoration, 0, PARENT)
 
         /// Marks a struct type as being used as a structured buffer block.
         /// Recognized by SPIRV-emit pass so we can emit a SPIRV `BufferBlock` decoration.
@@ -760,9 +796,18 @@ INST(ExtractTaggedUnionPayload,         extractTaggedUnionPayload,  1, 0)
 
 INST(BitCast,                           bitCast,                    1, 0)
 INST(Reinterpret,                       reinterpret,                1, 0)
+INST(IntCast, intCast, 1, 0)
+INST(FloatCast, floatCast, 1, 0)
+INST(CastIntToFloat, castIntToFloat, 1, 0)
+INST(CastFloatToInt, castFloatToInt, 1, 0)
 INST(CastPtrToBool, CastPtrToBool, 1, 0)
+INST(CastPtrToInt, CastPtrToInt, 1, 0)
+INST(CastIntToPtr, CastIntToPtr, 1, 0)
+INST(CastToVoid, castToVoid, 1, 0)
+
 INST(IsType, IsType, 3, 0)
 INST(ForwardDifferentiate,                   ForwardDifferentiate,            1, 0)
+INST(BackwardDifferentiate,                  BackwardDifferentiate,           1, 0)
 INST(DifferentialEqualityTypeCast, DifferentialEqualityTypeCast, 1, 0)
 
 // Converts other resources (such as ByteAddressBuffer) to the equivalent StructuredBuffer
@@ -792,6 +837,8 @@ INST_RANGE(Layout, VarLayout, EntryPointLayout)
     INST(CaseTypeLayoutAttr, caseLayout, 1, 0)
     INST(UNormAttr, unorm, 0, 0)
     INST(SNormAttr, snorm, 0, 0)
+    INST(NoDiffAttr, no_diff, 0, 0)
+
     /* SemanticAttr */
         INST(UserSemanticAttr, userSemantic, 2, 0)
         INST(SystemValueSemanticAttr, systemValueSemantic, 2, 0)
@@ -816,6 +863,11 @@ INST(ExistentialTypeSpecializationDictionary, ExistentialTypeSpecializationDicti
 
 /* Differentiable Type Dictionary */
 INST(DifferentiableTypeDictionaryItem, DifferentiableTypeDictionaryItem, 0, 0)
+
+/* DifferentiableMethodRequirementDictionaryItem */
+    INST(ForwardDifferentiableMethodRequirementDictionaryItem, DifferentiableMethodRequirementDictionaryItem, 0, 0)
+    INST(BackwardDifferentiableMethodRequirementDictionaryItem, DifferentiableMethodRequirementDictionaryItem, 0, 0)
+INST_RANGE(DifferentiableMethodRequirementDictionaryItem, ForwardDifferentiableMethodRequirementDictionaryItem, BackwardDifferentiableMethodRequirementDictionaryItem)
 
 #undef PARENT
 #undef USE_OTHER

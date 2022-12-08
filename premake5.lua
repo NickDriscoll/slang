@@ -189,6 +189,13 @@ newoption {
     default     = "true",
     allowed     = { { "true", "True"}, { "false", "False" } }
  }
+ newoption {
+    trigger = "full-debug-validation",
+    description = "(Optional) If true will enable full IR validation in debug build. (SLOW!)",
+    value = "bool",
+    default = "false",
+    allowed     = { { "true", "True"}, { "false", "False" } }
+ }
 
  buildLocation = _OPTIONS["build-location"]
  executeBinary = (_OPTIONS["execute-binary"] == "true")
@@ -203,7 +210,8 @@ newoption {
  skipSourceGeneration = (_OPTIONS["skip-source-generation"] == "true")
  deployLLVM = (_OPTIONS["deploy-slang-llvm"] == "true")
  deployGLSLang = (_OPTIONS["deploy-slang-glslang"] == "true")
- 
+ fullDebugValidation = (_OPTIONS["full-debug-validation"] == "true")
+
  -- If stdlib embedding is enabled, disable stdlib source embedding by default
  disableStdlibSource = enableEmbedStdLib
  
@@ -284,6 +292,8 @@ newoption {
          location(buildLocation)
      end
  
+     flags "MultiProcessorCompile"
+ 
      --
      -- Make slang-test the startup project.
      --
@@ -331,8 +341,9 @@ newoption {
      filter { "toolset:clang or gcc*", "language:C++" }
          buildoptions { "-Wno-reorder", "-Wno-class-memaccess"}
 
-     filter { "toolset:gcc*"}
-         buildoptions { "-Wno-implicit-fallthrough"  }
+     filter { "toolset:gcc*" }
+         buildoptions { "-Wno-implicit-fallthrough", "-Wno-maybe-uninitialized" }
+
 
      filter { "toolset:clang" }
           buildoptions { "-Wno-deprecated-register", "-Wno-tautological-compare", "-Wno-missing-braces", "-Wno-undefined-var-template", "-Wno-unused-function", "-Wno-return-std-move", "-Wno-ignored-optimization-argument", "-Wno-unknown-warning-option" }
@@ -869,6 +880,7 @@ tool "slangd"
      uuid "0C768A18-1D25-4000-9F37-DA5FE99E3B64"
      includedirs { "." }
      links { "compiler-core", "slang", "core", "miniz", "lz4" }
+     dependson { "slang-reflection-test-tool", "render-test-tool", "slang-unit-test-tool", "gfx-unit-test-tool" }
      -- We want to set to the root of the project, but that doesn't seem to work with '.'.
      -- So set a path that resolves to the same place.
      debugdir("source/..")
@@ -1346,6 +1358,10 @@ tool "slangd"
      if disableStdlibSource then
         defines { "SLANG_DISABLE_STDLIB_SOURCE" }
      end
+
+     if fullDebugValidation then
+        defines { "SLANG_ENABLE_FULL_IR_VALIDATION" }
+     end
  
      if enableEmbedStdLib then
          -- We only have this dependency if we are embedding stdlib
@@ -1428,6 +1444,9 @@ tool "slangd"
      includedirs { "." }
      addSourceDir "tools/unit-test"
      links { "lz4", "miniz", "core", "compiler-core",  "slang" }
+     if not targetInfo.isWindows then
+         links { "pthread" }
+     end
  
  if enableProfile then
      tool "slang-profile"
@@ -1489,6 +1508,8 @@ tool "slangd"
          "external/miniz/miniz_tinfl.c",
          "external/miniz/miniz_zip.c"
      }
+     filter { "system:linux" }
+         defines { "_LARGEFILE64_SOURCE" }
  
      filter { "system:linux or macosx" }
          links { "dl"}

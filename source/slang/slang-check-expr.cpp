@@ -160,6 +160,7 @@ namespace Slang
             ExtractExistentialValueExpr* openedValue = m_astBuilder->create<ExtractExistentialValueExpr>();
             openedValue->declRef = varDeclRef;
             openedValue->type = QualType(openedType);
+            openedValue->originalExpr = expr;
 
             // The result of opening an existential is an l-value
             // if the original existential is an l-value.
@@ -393,6 +394,15 @@ namespace Slang
         return derefExpr;
     }
 
+    InvokeExpr* SemanticsVisitor::constructUncheckedInvokeExpr(Expr* callee, const List<Expr*>& arguments)
+    {
+        auto result = m_astBuilder->create<InvokeExpr>();
+        result->loc = callee->loc;
+        result->functionExpr = callee;
+        result->arguments.addRange(arguments);
+        return result;
+    }
+
     Expr* SemanticsVisitor::maybeUseSynthesizedDeclForLookupResult(LookupResultItem const& item, Expr* originalExpr)
     {
         // If the only result from lookup is an entry in an interface decl, it could be that
@@ -493,7 +503,11 @@ namespace Slang
         auto toBeSynthesized = m_astBuilder->create<ToBeSynthesizedModifier>();
         addModifier(synthesizedDecl, toBeSynthesized);
 
-        return ConstructDeclRefExpr(makeDeclRef(synthesizedDecl), nullptr, originalExpr->loc, originalExpr);
+        return ConstructDeclRefExpr(
+            makeDeclRef(synthesizedDecl),
+            nullptr,
+            originalExpr ? originalExpr->loc : SourceLoc(),
+            originalExpr);
     }
 
     Expr* SemanticsVisitor::ConstructLookupResultExpr(
@@ -951,15 +965,13 @@ namespace Slang
     Expr* SemanticsVisitor::CheckTerm(Expr* term)
     {
         auto checkedTerm = _CheckTerm(term);
-
         // Differentiable type checking.
         // TODO: This can be super slow.
-        if (this->m_parentFunc && 
-            this->m_parentFunc->findModifier<ForwardDifferentiableAttribute>())
+        if (this->m_parentFunc &&
+            this->m_parentFunc->findModifier<DifferentiableAttribute>())
         {
             maybeRegisterDifferentiableType(getASTBuilder(), checkedTerm->type.type);
         }
-
         return checkedTerm;
     }
 
@@ -1042,6 +1054,18 @@ namespace Slang
         else if(auto overloadedExpr = as<OverloadedExpr>(expr))
         {
             return overloadedExpr->base;
+        }
+        else if (auto overloadedExpr2 = as<OverloadedExpr2>(expr))
+        {
+            return overloadedExpr2->base;
+        }
+        else if (auto genApp = as<GenericAppExpr>(expr))
+        {
+            return GetBaseExpr(genApp->functionExpr);
+        }
+        else if (auto partiallyApplied = as<PartiallyAppliedGenericExpr>(expr))
+        {
+            return GetBaseExpr(partiallyApplied->originalExpr);
         }
         return nullptr;
     }
@@ -1882,6 +1906,38 @@ namespace Slang
                         }
                     }
                 }
+
+                if (auto higherOrderInvoke = as<DifferentiateExpr>(invoke->functionExpr))
+                {
+                    if (auto funcDeclExpr = as<DeclRefExpr>(getInnerMostExprFromHigherOrderExpr(higherOrderInvoke)))
+                    {
+                        auto funcDecl = as<FunctionDeclBase>(funcDeclExpr->declRef.getDecl());
+                        if (funcDecl)
+                        {
+                            DifferentiateExpr* forwardDiff = nullptr;
+                            DifferentiateExpr* backwardDiff = nullptr;
+                            for (auto node = as<DifferentiateExpr>(invoke->functionExpr); node; node = as<DifferentiateExpr>(node->baseFunction))
+                            {
+                                if (auto fwd = as<ForwardDifferentiateExpr>(node))
+                                    forwardDiff = fwd;
+                                if (auto bwd = as<BackwardDifferentiateExpr>(node))
+                                    backwardDiff = bwd;
+                            }
+                            if (forwardDiff && !getShared()->isDifferentiableFunc(funcDecl))
+                            {
+                                getSink()->diagnose(forwardDiff, Diagnostics::functionNotMarkedAsDifferentiable, funcDecl, "forward");
+                            }
+                            if (backwardDiff && !getShared()->isBackwardDifferentiableFunc(funcDecl))
+                            {
+                                getSink()->diagnose(forwardDiff, Diagnostics::functionNotMarkedAsDifferentiable, funcDecl, "backward");
+                            }
+                            if (!isEffectivelyStatic(funcDecl) && !isGlobalDecl(funcDecl))
+                            {
+                                getSink()->diagnose(forwardDiff, Diagnostics::nonStaticMemberFunctionNotAllowedAsDiffOperand, funcDecl);
+                            }
+                        }
+                    }
+                }
             }
         }
         return rs;
@@ -1909,7 +1965,7 @@ namespace Slang
 
         auto checkedExpr = CheckInvokeExprWithCheckedOperands(expr);
 
-        if (m_parentFunc && m_parentFunc->hasModifier<DifferentiableAttribute>())
+        if (m_parentDifferentiableAttr)
         {
             if (auto checkedInvokeExpr = as<InvokeExpr>(checkedExpr))
             {
@@ -1917,6 +1973,30 @@ namespace Slang
                 for (auto& arg : expr->arguments)
                 {
                     maybeRegisterDifferentiableType(m_astBuilder, arg->type.type);
+                }
+                if (auto calleeExpr = as<DeclRefExpr>(checkedInvokeExpr->functionExpr))
+                {
+                    if (auto calleeDecl = as<FunctionDeclBase>(calleeExpr->declRef.getDecl()))
+                    {
+                        if (getShared()->isDifferentiableFunc(calleeDecl))
+                        {
+                            if (!m_treatAsDifferentiableExpr)
+                            {
+                                auto newFuncExpr =
+                                    getASTBuilder()->create<TreatAsDifferentiableExpr>();
+                                newFuncExpr->type = checkedInvokeExpr->type;
+                                newFuncExpr->innerExpr = checkedInvokeExpr;
+                                newFuncExpr->loc = checkedInvokeExpr->loc;
+                                checkedExpr = newFuncExpr;
+                            }
+                            else
+                            {
+                                getSink()->diagnose(
+                                    m_treatAsDifferentiableExpr,
+                                    Diagnostics::useOfNoDiffOnDifferentiableFunc);
+                            }
+                        }
+                    }
                 }
             }
             maybeRegisterDifferentiableType(m_astBuilder, checkedExpr->type.type);
@@ -1980,6 +2060,12 @@ namespace Slang
 
     Type* SemanticsVisitor::getDifferentialPairType(Type* primalType)
     {
+        if (auto modifiedType = as<ModifiedType>(primalType))
+        {
+            if (modifiedType->findModifier<NoDiffModifierVal>())
+                return modifiedType->base;
+        }
+
         // Get a reference to the builtin 'IDifferentiable' interface
         auto differentiableInterface = m_astBuilder->getDifferentiableInterface();
 
@@ -1992,7 +2078,7 @@ namespace Slang
             return primalType;
     }
 
-    Type* SemanticsVisitor::processJVPFuncType(FuncType* originalType)
+    Type* SemanticsVisitor::getForwardDiffFuncType(FuncType* originalType)
     {
         // Resolve JVP type here. 
         // Note that this type checking needs to be in sync with
@@ -2018,15 +2104,222 @@ namespace Slang
         return jvpType;
     }
 
-    Expr* SemanticsExprVisitor::visitForwardDifferentiateExpr(ForwardDifferentiateExpr* expr)
+    Type* SemanticsVisitor::getBackwardDiffFuncType(FuncType* originalType)
+    {
+        // Resolve backward diff type here. 
+        // Note that this type checking needs to be in sync with
+        // the auto-generation logic in slang-ir-jvp-diff.cpp
+
+        FuncType* type = m_astBuilder->create<FuncType>();
+
+        // The backward diff return type is void
+        //
+        type->resultType = m_astBuilder->getVoidType();
+
+        // No support for differentiating function that throw errors, for now.
+        SLANG_ASSERT(originalType->errorType->equals(m_astBuilder->getBottomType()));
+        type->errorType = originalType->errorType;
+
+        for (UInt i = 0; i < originalType->getParamCount(); i++)
+        {
+            if (auto derivType = _toDifferentialParamType(originalType->getParamType(i)))
+            {
+                // Using inout type on all the derivative parameters
+                if (auto outType = as<OutType>(derivType))
+                {
+                    derivType = outType->getValueType();
+                }
+                else if (!as<PtrTypeBase>(derivType))
+                {
+                    derivType = m_astBuilder->getInOutType(derivType);
+                }
+                type->paramTypes.add(derivType);
+            }
+        }
+        
+        // Last parameter is the initial derivative of the original return type
+        type->paramTypes.add(getDifferentialType(m_astBuilder, originalType->resultType, SourceLoc()));
+
+        return type;
+    }
+
+    struct DifferentiateExprCheckingActions
+    {
+        virtual DifferentiateExpr* createDifferentiateExpr(SemanticsVisitor* semantics) = 0;
+        virtual void fillDifferentiateExpr(DifferentiateExpr* resultDiffExpr, SemanticsVisitor* semantics, Expr* funcExpr) = 0;
+        FuncType* getBaseFunctionType(SemanticsVisitor* semantics, Expr* funcExpr)
+        {
+            if (auto funcType = as<FuncType>(funcExpr->type.type))
+                return funcType;
+            auto astBuilder = semantics->getASTBuilder();
+            if (auto declRefExpr = as<DeclRefExpr>(funcExpr))
+            {
+                if (auto baseFuncGenericDeclRef = declRefExpr->declRef.as<GenericDecl>())
+                {
+                    // Get inner function
+                    DeclRef<Decl> unspecializedInnerRef = DeclRef<Decl>(
+                        getInner(baseFuncGenericDeclRef),
+                        baseFuncGenericDeclRef.substitutions);
+                    auto callableDeclRef = unspecializedInnerRef.as<CallableDecl>();
+                    if (!callableDeclRef)
+                        return nullptr;
+                    auto funcType = getFuncType(astBuilder, callableDeclRef);
+                    return funcType;
+                }
+            }
+            return nullptr;
+        }
+    };
+
+    struct ForwardDifferentiateExprCheckingActions : DifferentiateExprCheckingActions
+    {
+        virtual DifferentiateExpr* createDifferentiateExpr(SemanticsVisitor* semantics) override
+        {
+            return semantics->getASTBuilder()->create<ForwardDifferentiateExpr>();
+        }
+        void fillDifferentiateExpr(DifferentiateExpr* resultDiffExpr, SemanticsVisitor* semantics, Expr* funcExpr) override
+        {
+            resultDiffExpr->baseFunction = funcExpr;
+            auto baseFuncType = getBaseFunctionType(semantics, funcExpr);
+            if (!baseFuncType)
+            {
+                resultDiffExpr->type = semantics->getASTBuilder()->getErrorType();
+                semantics->getSink()->diagnose(funcExpr, Diagnostics::expectedFunction, funcExpr->type.type);
+                return;
+            }
+            resultDiffExpr->type = semantics->getForwardDiffFuncType(baseFuncType);
+            if (auto declRefExpr = as<DeclRefExpr>(getInnerMostExprFromHigherOrderExpr(funcExpr)))
+            {
+                auto funcDecl = declRefExpr->declRef.as<CallableDecl>().getDecl();
+                if (auto genDecl = as<GenericDecl>(declRefExpr->declRef.getDecl()))
+                {
+                    funcDecl = as<CallableDecl>(genDecl->inner);
+                }
+                if (funcDecl)
+                {
+                    for (auto param : funcDecl->getParameters())
+                    {
+                        resultDiffExpr->newParameterNames.add(param->getName());
+                    }
+                }
+            }
+        }
+    };
+
+    struct BackwardDifferentiateExprCheckingActions : DifferentiateExprCheckingActions
+    {
+        virtual DifferentiateExpr* createDifferentiateExpr(SemanticsVisitor* semantics) override
+        {
+            return semantics->getASTBuilder()->create<BackwardDifferentiateExpr>();
+        }
+        void fillDifferentiateExpr(DifferentiateExpr* resultDiffExpr, SemanticsVisitor* semantics, Expr* funcExpr) override
+        {
+            resultDiffExpr->baseFunction = funcExpr;
+            auto baseFuncType = getBaseFunctionType(semantics, funcExpr);
+            if (!baseFuncType)
+            {
+                resultDiffExpr->type = semantics->getASTBuilder()->getErrorType();
+                semantics->getSink()->diagnose(funcExpr, Diagnostics::expectedFunction, funcExpr->type.type);
+            }
+            resultDiffExpr->type = semantics->getBackwardDiffFuncType(baseFuncType);
+            if (auto declRefExpr = as<DeclRefExpr>(getInnerMostExprFromHigherOrderExpr(funcExpr)))
+            {
+                auto funcDecl = declRefExpr->declRef.as<CallableDecl>().getDecl();
+                if (auto genDecl = as<GenericDecl>(declRefExpr->declRef.getDecl()))
+                {
+                    funcDecl = as<CallableDecl>(genDecl->inner);
+                }
+                if (funcDecl)
+                {
+                    for (auto param : funcDecl->getParameters())
+                    {
+                        resultDiffExpr->newParameterNames.add(param->getName());
+                    }
+                    resultDiffExpr->newParameterNames.add(semantics->getName("resultGradient"));
+                }
+            }
+        }
+    };
+
+    static Expr* _checkDifferentiateExpr(
+        SemanticsVisitor* semantics,
+        DifferentiateExpr* expr,
+        DifferentiateExprCheckingActions* actions)
     {
         // Check/Resolve inner function declaration.
-        expr->baseFunction = CheckTerm(expr->baseFunction);
+        expr->baseFunction = semantics->CheckTerm(expr->baseFunction);
 
-        // For now we only support using higher order expr as callee in an invoke expr.
-        // The actual type of the higher order function will be derived during resolve invoke.
-        expr->type = m_astBuilder->getBottomType();
+        auto astBuilder = semantics->getASTBuilder();
 
+        // If base is overloaded expr, we want to return an overloaded expr as check result.
+        // This is done by pushing the `differentiate` operator to each item in the overloaded expr.
+        if (auto overloadedExpr = as<OverloadedExpr>(expr->baseFunction))
+        {
+            OverloadedExpr2* result = astBuilder->create<OverloadedExpr2>();
+            for (auto item : overloadedExpr->lookupResult2)
+            {
+                auto lookupResultExpr = semantics->ConstructLookupResultExpr(item,
+                    nullptr,
+                    overloadedExpr->loc,
+                    nullptr);
+                auto candidateExpr = actions->createDifferentiateExpr(semantics);
+                actions->fillDifferentiateExpr(candidateExpr, semantics, lookupResultExpr);
+                candidateExpr->loc = expr->loc;
+                result->candidiateExprs.add(candidateExpr);
+            }
+            result->type.type = astBuilder->getOverloadedType();
+            result->loc = expr->loc;
+            return result;
+        }
+        else if (auto overloadedExpr2 = as<OverloadedExpr2>(expr->baseFunction))
+        {
+            OverloadedExpr2* result = astBuilder->create<OverloadedExpr2>();
+            for (auto item : overloadedExpr2->candidiateExprs)
+            {
+                auto candidateExpr = actions->createDifferentiateExpr(semantics);
+                actions->fillDifferentiateExpr(candidateExpr, semantics, item);
+                candidateExpr->loc = expr->loc;
+                result->candidiateExprs.add(candidateExpr);
+            }
+            result->type.type = astBuilder->getOverloadedType();
+            result->loc = expr->loc;
+            return result;
+        }
+
+        actions->fillDifferentiateExpr(expr, semantics, expr->baseFunction);
+        return expr;
+    }
+
+    Expr* SemanticsExprVisitor::visitForwardDifferentiateExpr(ForwardDifferentiateExpr* expr)
+    {
+        ForwardDifferentiateExprCheckingActions actions;
+        return _checkDifferentiateExpr(this, expr, &actions);
+    }
+
+    Expr* SemanticsExprVisitor::visitBackwardDifferentiateExpr(BackwardDifferentiateExpr* expr)
+    {
+        BackwardDifferentiateExprCheckingActions actions;
+        return _checkDifferentiateExpr(this, expr, &actions);
+    }
+
+    Expr* SemanticsExprVisitor::visitTreatAsDifferentiableExpr(TreatAsDifferentiableExpr* expr)
+    {
+        auto subContext = withTreatAsDifferentiable(expr);
+        expr->innerExpr = dispatchExpr(expr->innerExpr, subContext);
+        expr->type = expr->innerExpr->type;
+        auto innerExpr = expr->innerExpr;
+        while (auto parenExpr = as<ParenExpr>(innerExpr))
+        {
+            innerExpr = parenExpr->base;
+        }
+        if (!as<InvokeExpr>(innerExpr))
+        {
+            getSink()->diagnose(expr, Diagnostics::invalidUseOfNoDiff);
+        }
+        else if (!m_parentDifferentiableAttr)
+        {
+            getSink()->diagnose(expr, Diagnostics::cannotUseNoDiffInNonDifferentiableFunc);
+        }
         return expr;
     }
 
@@ -2855,7 +3148,7 @@ namespace Slang
         // because vectors are also declaration reference types...
         //
         // Also note: the way this is done right now means that the ability
-        // to swizzle vectors interferes with any chance of looking up
+        // to swizzle vectors interferes with any chance o<f looking up
         // members via extension, for vector or scalar types.
         //
         // TODO: Matrix swizzles probably need to be handled at some point.
@@ -3107,6 +3400,10 @@ namespace Slang
         {
             // TODO: validate that `type` is either `float` or a vector of `float`s
             return m_astBuilder->getSNormModifierVal();
+        }
+        else if (auto noDiffModifier = as<NoDiffModifier>(modifier))
+        {
+            return m_astBuilder->getNoDiffModifierVal();
         }
         else
         {

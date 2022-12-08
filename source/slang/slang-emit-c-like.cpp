@@ -41,6 +41,56 @@ struct CLikeSourceEmitter::ComputeEmitActionsContext
     List<EmitAction>*   actions;
 };
 
+/* !!!!!!!!!!!!!!!!!!!!!!!!!!!! LocationTracker !!!!!!!!!!!!!!!!!!!!!!!!!! */
+
+/* static */LocationTracker::Kind LocationTracker::getKindFromDecoration(IRDecoration* decoration)
+{
+    switch (decoration->getOp())
+    {
+        case kIROp_VulkanRayPayloadDecoration:          return Kind::RayPayload;
+        case kIROp_VulkanCallablePayloadDecoration:     return Kind::CallablePayload;
+        case kIROp_VulkanHitObjectAttributesDecoration: return Kind::HitObjectAttribute;
+        default: break;
+    }
+    return Kind::Invalid;
+}
+
+Index LocationTracker::getValue(IRInst* inst, IRDecoration* decoration)
+{
+    const Kind kind = getKindFromDecoration(decoration);
+    SLANG_RELEASE_ASSERT(kind != Kind::Invalid);
+    if (kind == Kind::Invalid)
+    {
+        return -1;
+    }
+
+    return getValue(kind, inst, decoration);
+}
+
+Index LocationTracker::getValue(Kind kind, IRInst* inst, IRDecoration* decoration)
+{
+    if (decoration->getOperandCount() > 0)
+    {
+        // TODO(JS):
+        // There could be a clash with the auto generated location, and the user set value/ 
+        // Perhaps the implication in practice is that either all are marked or none.
+        const int explicitLocation = int(getIntVal(decoration->getOperand(0)));
+        if (explicitLocation >= 0)
+            return UInt(explicitLocation);
+    }
+
+    auto& nextValue = m_nextValueForKind[Index(kind)];
+
+    const Location defaultLocation{kind, nextValue};
+    const Location foundLocation = m_mapIRToLocations.GetOrAddValue(inst, defaultLocation);
+
+    // Increase if it was the default
+    nextValue += Index(defaultLocation == foundLocation);
+
+    // Has to match the kind
+    return (foundLocation.kind == kind) ? foundLocation.value : -1;
+}
+
 /* !!!!!!!!!!!!!!!!!!!!!!!!!!!! CLikeSourceEmitter !!!!!!!!!!!!!!!!!!!!!!!!!! */
 
 /* static */SourceLanguage CLikeSourceEmitter::getSourceLanguage(CodeGenTarget target)
@@ -1057,9 +1107,9 @@ bool CLikeSourceEmitter::shouldFoldInstIntoUseSites(IRInst* inst)
     // in pointers directly.
     //
     case kIROp_FieldAddress:
-    case kIROp_getElementPtr:
+    case kIROp_GetElementPtr:
     case kIROp_Specialize:
-    case kIROp_lookup_interface_method:
+    case kIROp_LookupWitness:
     case kIROp_GetValueFromBoundInterface:
         return true;
     }
@@ -1082,8 +1132,8 @@ bool CLikeSourceEmitter::shouldFoldInstIntoUseSites(IRInst* inst)
     // them to initializer lists, which aren't allowed in
     // general expression contexts.
     //
-    case kIROp_makeStruct:
-    case kIROp_makeArray:
+    case kIROp_MakeStruct:
+    case kIROp_MakeArray:
     case kIROp_swizzleSet:
         return false;
 
@@ -1171,6 +1221,10 @@ bool CLikeSourceEmitter::shouldFoldInstIntoUseSites(IRInst* inst)
             return true;
         }
         else if(as<IRSamplerStateTypeBase>(type))
+        {
+            return true;
+        }
+        else if(as<IRMeshOutputType>(type))
         {
             return true;
         }
@@ -1643,7 +1697,7 @@ void CLikeSourceEmitter::emitCallExpr(IRCall* inst, EmitOpInfo outerPrec)
     handleRequiredCapabilities(funcValue);
 
     // Detect if this is a call into a COM interface method.
-    if (funcValue->getOp() == kIROp_lookup_interface_method)
+    if (funcValue->getOp() == kIROp_LookupWitness)
     {
         auto operand0Type = funcValue->getOperand(0)->getDataType();
         switch (operand0Type->getOp())
@@ -1722,9 +1776,15 @@ void CLikeSourceEmitter::defaultEmitInstExpr(IRInst* inst, const EmitOpInfo& inO
         emitSimpleValue(inst);
         break;
 
-    case kIROp_Construct:
-    case kIROp_makeVector:
+    case kIROp_MakeVector:
     case kIROp_MakeMatrix:
+    case kIROp_MakeMatrixFromScalar:
+    case kIROp_MatrixReshape:
+    case kIROp_VectorReshape:
+    case kIROp_CastFloatToInt:
+    case kIROp_CastIntToFloat:
+    case kIROp_IntCast:
+    case kIROp_FloatCast:
         // Simple constructor call
         emitType(inst->getDataType());
         emitArgs(inst);
@@ -1734,7 +1794,7 @@ void CLikeSourceEmitter::defaultEmitInstExpr(IRInst* inst, const EmitOpInfo& inO
         m_writer->emit(getName(inst->getDataType()));
         m_writer->emit("()");
         break;
-    case kIROp_makeUInt64:
+    case kIROp_MakeUInt64:
         m_writer->emit("((");
         emitType(inst->getDataType());
         m_writer->emit("(");
@@ -1743,7 +1803,9 @@ void CLikeSourceEmitter::defaultEmitInstExpr(IRInst* inst, const EmitOpInfo& inO
         emitOperand(inst->getOperand(0), getInfo(EmitOp::General));
         m_writer->emit(")");
         break;
-    case kIROp_constructVectorFromScalar:
+    case kIROp_MakeVectorFromScalar:
+    case kIROp_CastPtrToInt:
+    case kIROp_CastIntToPtr:
     {
         // Simple constructor call
         auto prec = getInfo(EmitOp::Prefix);
@@ -1944,7 +2006,7 @@ void CLikeSourceEmitter::defaultEmitInstExpr(IRInst* inst, const EmitOpInfo& inO
             m_writer->emit("->getBuffer()");
             break;
         }
-    case kIROp_makeString:
+    case kIROp_MakeString:
         {
             m_writer->emit("String(");
             emitOperand(inst->getOperand(0), EmitOpInfo());
@@ -1985,8 +2047,8 @@ void CLikeSourceEmitter::defaultEmitInstExpr(IRInst* inst, const EmitOpInfo& inO
         m_writer->emit(".detach()");
         break;
     }
-    case kIROp_getElement:
-    case kIROp_getElementPtr:
+    case kIROp_GetElement:
+    case kIROp_GetElementPtr:
     case kIROp_ImageSubscript:
         // HACK: deal with translation of GLSL geometry shader input arrays.
         if(auto decoration = inst->getOperand(0)->findDecoration<IRGLSLOuterArrayDecoration>())
@@ -2003,7 +2065,7 @@ void CLikeSourceEmitter::defaultEmitInstExpr(IRInst* inst, const EmitOpInfo& inO
         }
         else
         {
-            if (inst->getOp() == kIROp_getElementPtr && doesTargetSupportPtrTypes())
+            if (inst->getOp() == kIROp_GetElementPtr && doesTargetSupportPtrTypes())
             {
                 const auto info = getInfo(EmitOp::Prefix);
                 needClose = maybeEmitParens(outerPrec, info);
@@ -2093,8 +2155,8 @@ void CLikeSourceEmitter::defaultEmitInstExpr(IRInst* inst, const EmitOpInfo& inO
         m_writer->emit(getName(inst));
         break;
 
-    case kIROp_makeArray:
-    case kIROp_makeStruct:
+    case kIROp_MakeArray:
+    case kIROp_MakeStruct:
         {
             // TODO: initializer-list syntax may not always
             // be appropriate, depending on the context
@@ -2207,6 +2269,24 @@ void CLikeSourceEmitter::defaultEmitInstExpr(IRInst* inst, const EmitOpInfo& inO
         m_writer->emit(")");
         break;
     }
+    case kIROp_GetStringHash:
+    {
+        auto getStringHashInst = as<IRGetStringHash>(inst);
+        auto stringLit = getStringHashInst->getStringLit();
+
+        if (stringLit)
+        {
+            auto slice = stringLit->getStringSlice();
+            m_writer->emit(static_cast<int32_t>(getStableHashCode32(slice.begin(), slice.getLength())));
+        }
+        else
+        {
+            // Couldn't handle 
+            diagnoseUnhandledInst(inst);
+        }
+        break;
+    }
+
     default:
         diagnoseUnhandledInst(inst);
         break;
@@ -2649,6 +2729,7 @@ void CLikeSourceEmitter::emitSimpleFuncParamImpl(IRParam* param)
             || layout->usesResourceKind(LayoutResourceKind::VaryingOutput))
         {
             emitInterpolationModifiers(param, paramType, layout);
+            emitMeshOutputModifiers(param);
         }
     }
 
@@ -2872,6 +2953,13 @@ void CLikeSourceEmitter::emitStruct(IRStructType* structType)
     emitPostKeywordTypeAttributes(structType);
 
     m_writer->emit(getName(structType));
+
+    emitStructDeclarationsBlock(structType);
+    m_writer->emit(";\n\n");
+}
+
+void CLikeSourceEmitter::emitStructDeclarationsBlock(IRStructType* structType)
+{
     m_writer->emit("\n{\n");
     m_writer->indent();
 
@@ -2897,7 +2985,7 @@ void CLikeSourceEmitter::emitStruct(IRStructType* structType)
     }
 
     m_writer->dedent();
-    m_writer->emit("};\n\n");
+    m_writer->emit("}");
 }
 
 void CLikeSourceEmitter::emitClass(IRClassType* classType)
@@ -3009,44 +3097,9 @@ void CLikeSourceEmitter::emitInterpolationModifiers(IRInst* varInst, IRType* val
     emitInterpolationModifiersImpl(varInst, valueType, layout);
 }
 
-UInt CLikeSourceEmitter::getRayPayloadLocation(IRInst* inst)
+void CLikeSourceEmitter::emitMeshOutputModifiers(IRInst* varInst)
 {
-    if (auto rayPayloadDecoration = inst->findDecoration<IRVulkanRayPayloadDecoration>())
-    {
-        int explicitLocation = int(getIntVal(rayPayloadDecoration->getOperand(0)));
-
-        if (explicitLocation >= 0)
-            return UInt(explicitLocation);
-    }
-
-    auto& map = m_mapIRValueToRayPayloadLocation;
-    UInt value = 0;
-    if(map.TryGetValue(inst, value))
-        return value;
-
-    value = map.Count();
-    map.Add(inst, value);
-    return value;
-}
-
-UInt CLikeSourceEmitter::getCallablePayloadLocation(IRInst* inst)
-{
-    if (auto callablePayloadDecoration = inst->findDecoration<IRVulkanCallablePayloadDecoration>())
-    {
-        int explicitLocation = int(getIntVal(callablePayloadDecoration->getOperand(0)));
-
-        if (explicitLocation >= 0)
-            return UInt(explicitLocation);
-    }
-
-    auto& map = m_mapIRValueToCallablePayloadLocation;
-    UInt value = 0;
-    if(map.TryGetValue(inst, value))
-        return value;
-
-    value = map.Count();
-    map.Add(inst, value);
-    return value;
+    emitMeshOutputModifiersImpl(varInst);
 }
 
     /// Emit modifiers that should apply even for a declaration of an SSA temporary.
@@ -3077,6 +3130,7 @@ void CLikeSourceEmitter::emitVarModifiers(IRVarLayout* layout, IRInst* varDecl, 
         || layout->usesResourceKind(LayoutResourceKind::VaryingOutput))
     {
         emitInterpolationModifiers(varDecl, varType, layout);
+        emitMeshOutputModifiers(varDecl);
     }
 
     // Output target specific qualifiers
@@ -3430,7 +3484,7 @@ void CLikeSourceEmitter::ensureInstOperandsRec(ComputeEmitActionsContext* ctx, I
     case kIROp_NativePtrType:
         requiredLevel = EmitAction::ForwardDeclaration;
         break;
-    case kIROp_lookup_interface_method:
+    case kIROp_LookupWitness:
     case kIROp_FieldExtract:
     case kIROp_FieldAddress:
     {

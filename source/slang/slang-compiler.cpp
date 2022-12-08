@@ -224,7 +224,7 @@ namespace Slang
     }
 
     void EntryPoint::updateDependencyBasedHash(
-        DigestBuilder& builder,
+        DigestBuilder<MD5>& builder,
         SlangInt entryPointIndex)
     {
         // CompositeComponentType will have already hashed the relevant entry point's name
@@ -302,7 +302,7 @@ namespace Slang
     }
 
     void TypeConformance::updateDependencyBasedHash(
-        DigestBuilder& builder,
+        DigestBuilder<MD5>& builder,
         SlangInt entryPointIndex)
     {
         SLANG_UNUSED(entryPointIndex);
@@ -310,8 +310,8 @@ namespace Slang
         //TODO: Implement some kind of hashInto for Val then replace this
         auto subtypeWitness = m_subtypeWitness->toString();
 
-        builder.addToDigest(subtypeWitness);
-        builder.addToDigest(m_conformanceIdOverride);
+        builder.append(subtypeWitness);
+        builder.append(m_conformanceIdOverride);
     }
 
     List<Module*> const& TypeConformance::getModuleDependencies()
@@ -1014,7 +1014,16 @@ namespace Slang
                 auto& args = linkage->m_downstreamArgs.getArgsAt(nameIndex);
                 for (const auto& arg : args.m_args)
                 {
-                    compilerSpecificArguments.add(arg.value);
+                    // We special case some kinds of args, that can be handled directly
+                    if (arg.value.startsWith("-I"))
+                    {
+                        // We handle the -I option, by just adding to the include paths
+                        includePaths.add(arg.value.getUnownedSlice().tail(2));
+                    }
+                    else
+                    {
+                        compilerSpecificArguments.add(arg.value);
+                    }
                 }
             }
         }

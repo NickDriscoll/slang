@@ -106,6 +106,10 @@ namespace Slang
         return declRef.substitute(astBuilder, declRef.getDecl()->type.Ptr());
     }
 
+        /// same as getType, but take into account the additional type modifiers from the parameter's modifier list
+        /// and return a ModifiedType if such modifiers exist.
+    Type* getParamType(ASTBuilder* astBuilder, DeclRef<VarDeclBase> const& paramDeclRef);
+
     inline SubstExpr<Expr> getInitExpr(ASTBuilder* astBuilder, DeclRef<VarDeclBase> const& declRef)
     {
         return declRef.substitute(astBuilder, declRef.getDecl()->initExpr);
@@ -276,7 +280,7 @@ namespace Slang
     //
 
     ThisTypeSubstitution* findThisTypeSubstitution(
-        Substitutions*  substs,
+        const Substitutions*  substs,
         InterfaceDecl*  interfaceDecl);
 
     RequirementWitness tryLookUpRequirementWitness(
@@ -309,6 +313,10 @@ namespace Slang
 
     GenericSubstitution* findInnerMostGenericSubstitution(Substitutions* subst);
 
+    ThisTypeSubstitution* findThisTypeSubstitution(
+        const Substitutions* substs,
+        InterfaceDecl* interfaceDecl);
+
     enum class UserDefinedAttributeTargets
     {
         None = 0,
@@ -321,10 +329,11 @@ namespace Slang
         /// Get the module dclaration that a declaration is associated with, if any.
     ModuleDecl* getModuleDecl(Decl* decl);
 
-    /// Get the module that a declaration is associated with, if any.
+        /// Get the module that a declaration is associated with, if any.
     Module* getModule(Decl* decl);
 
-   
+        /// Get the parent decl, skipping any generic decls in between.
+    Decl* getParentDecl(Decl* decl);
 
 } // namespace Slang
 

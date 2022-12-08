@@ -64,8 +64,8 @@ namespace Slang
     void printDiagnosticArg(StringBuilder& sb, Val* val);
 
     class SyntaxNode;
-    SourceLoc const& getDiagnosticPos(SyntaxNode const* syntax);
-    SourceLoc const& getDiagnosticPos(TypeExp const& typeExp);
+    SourceLoc getDiagnosticPos(SyntaxNode const* syntax);
+    SourceLoc getDiagnosticPos(TypeExp const& typeExp);
 
     typedef NodeBase* (*SyntaxParseCallback)(Parser* parser, void* userData);
 
@@ -474,6 +474,10 @@ namespace Slang
         ModifiableSyntaxNode*    syntax,
         Modifier*                modifier);
 
+    void removeModifier(
+        ModifiableSyntaxNode* syntax,
+        Modifier* modifier);
+
     struct QualType
     {
         SLANG_VALUE_CLASS(QualType) 
@@ -789,7 +793,7 @@ namespace Slang
     // try to find the concrete decl that satisfies the associatedtype requirement from the
     // concrete type supplied by ThisTypeSubstittution.
     Val* _tryLookupConcreteAssociatedTypeFromThisTypeSubst(ASTBuilder* builder, DeclRef<Decl> declRef);
-
+    void _printNestedDecl(const Substitutions* substitutions, Decl* decl, StringBuilder& out);
 
     template<typename T>
     struct DeclRef : DeclRefBase
@@ -1442,7 +1446,6 @@ namespace Slang
     {
         SLANG_OBJ_CLASS(WitnessTable)
 
-        List<KeyValuePair<Decl*, RequirementWitness>> requirementList;
         RequirementDictionary requirementDictionary;
 
         void add(Decl* decl, RequirementWitness const& witness);
@@ -1493,6 +1496,28 @@ namespace Slang
         List<ExtensionDecl*> candidateExtensions;
     };
 
+
+    enum class DeclAssociationKind
+    {
+        ForwardDerivativeFunc, BackwardDerivativeFunc,
+    };
+
+    struct DeclAssociation
+    {
+        SLANG_VALUE_CLASS(DeclAssociation)
+        DeclAssociationKind kind;
+        Decl* decl;
+    };
+
+    /// A reference-counted object to hold a list of associated decls for a decl.
+    ///
+    struct DeclAssociationList : SerialRefObject
+    {
+        SLANG_OBJ_CLASS(DeclAssociationList)
+
+        List<DeclAssociation> associations;
+    };
+
         /// Represents the "direction" that a parameter is being passed (e.g., `in` or `out`
     enum ParameterDirection
     {
@@ -1510,6 +1535,13 @@ namespace Slang
         DAddFunc, ///< The `IDifferentiable.dadd` function requirement 
         DMulFunc, ///< The `IDifferentiable.dmul` function requirement 
     };
+
+    /// Get the inner most expr from an higher order expr chain, e.g. `__fwd_diff(__fwd_diff(f))`'s
+    /// inner most expr is `f`.
+    Expr* getInnerMostExprFromHigherOrderExpr(Expr* expr);
+
+    /// Get the operator name from the higher order invoke expr.
+    UnownedStringSlice getHigherOrderOperatorName(HigherOrderInvokeExpr* expr);
 
 } // namespace Slang
 

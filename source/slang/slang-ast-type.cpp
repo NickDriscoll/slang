@@ -169,27 +169,6 @@ Val* BottomType::_substituteImplOverride(
 
 HashCode BottomType::_getHashCodeOverride() { return HashCode(size_t(this)); }
 
-// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! DifferentialBottomType !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-void DifferentialBottomType::_toTextOverride(StringBuilder& out) { out << toSlice("diff_bottom"); }
-
-bool DifferentialBottomType::_equalsImplOverride(Type* type)
-{
-    if (auto bottomType = as<DifferentialBottomType>(type))
-        return true;
-    return false;
-}
-
-Type* DifferentialBottomType::_createCanonicalTypeOverride() { return this; }
-
-Val* DifferentialBottomType::_substituteImplOverride(
-    ASTBuilder* /* astBuilder */, SubstitutionSet /*subst*/, int* /*ioDiff*/)
-{
-    return this;
-}
-
-HashCode DifferentialBottomType::_getHashCodeOverride() { return HashCode(size_t(this)); }
-
 // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! DeclRefType !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 void DeclRefType::_toTextOverride(StringBuilder& out)
@@ -473,6 +452,11 @@ Type* NamespaceType::_createCanonicalTypeOverride()
     return this;
 }
 
+Type* DifferentialPairType::getPrimalType()
+{
+    return as<Type>(findInnerMostGenericSubstitution(declRef.substitutions)->getArgs()[0]);
+}
+
 
 // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! PtrTypeBase !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
@@ -490,10 +474,9 @@ Type* OptionalType::getValueType()
 
 void NamedExpressionType::_toTextOverride(StringBuilder& out)
 {
-    Name* name = declRef.getName();
-    if (name)
+    if (declRef.getDecl())
     {
-        out << name->text;
+        _printNestedDecl(declRef.substitutions, declRef.getDecl(), out);
     }
 }
 
@@ -1174,5 +1157,14 @@ Val* ModifiedType::_substituteImplOverride(ASTBuilder* astBuilder, SubstitutionS
     return substType;
 }
 
+Type* removeParamDirType(Type* type)
+{
+    for (auto paramDirType = as<ParamDirectionType>(type); paramDirType;)
+    {
+        type = paramDirType->getValueType();
+        paramDirType = as<ParamDirectionType>(type);
+    }
+    return type;
+}
 
 } // namespace Slang

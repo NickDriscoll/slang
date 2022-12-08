@@ -301,17 +301,7 @@ namespace Slang
         auto parentGenericDeclRef = parentDeclRef.as<GenericDecl>();
         if( parentDeclRef )
         {
-            // In certain cases we want to skip emitting the parent
-            if(parentGenericDeclRef && (parentGenericDeclRef.getDecl()->inner != declRef.getDecl()))
-            {
-            }
-            else if(parentDeclRef.as<FunctionDeclBase>())
-            {
-            }
-            else
-            {
-                emitQualifiedName(context, parentDeclRef);
-            }
+            emitQualifiedName(context, parentDeclRef);
         }
 
         // A generic declaration is kind of a pseudo-declaration
@@ -325,7 +315,7 @@ namespace Slang
         // Inheritance declarations don't have meaningful names,
         // and so we should emit them based on the type
         // that is doing the inheriting.
-        if(auto inheritanceDeclRef = declRef.as<InheritanceDecl>())
+        if(auto inheritanceDeclRef = declRef.as<TypeConstraintDecl>())
         {
             emit(context, "I");
             emitType(context, getSup(context->astBuilder, inheritanceDeclRef));
@@ -527,6 +517,10 @@ namespace Slang
             emitQualifiedName(context, innerDecl);
             return;
         }
+        else if (as<ForwardDerivativeRequirementDecl>(decl))
+            emitRaw(context, "FwdReq_");
+        else if (as<BackwardDerivativeRequirementDecl>(decl))
+            emitRaw(context, "BwdReq_");
         else
         {
             // TODO: handle other cases

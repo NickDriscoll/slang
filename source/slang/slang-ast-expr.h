@@ -425,6 +425,7 @@ class ExtractExistentialValueExpr: public Expr
 {
     SLANG_AST_CLASS(ExtractExistentialValueExpr)
     DeclRef<VarDeclBase> declRef;
+    Expr* originalExpr;
 };
 
 class OpenRefExpr : public Expr
@@ -440,15 +441,38 @@ class OpenRefExpr : public Expr
 class HigherOrderInvokeExpr : public Expr
 {
     SLANG_ABSTRACT_AST_CLASS(HigherOrderInvokeExpr)
-    Expr* baseFunction;
+        Expr* baseFunction;
+    List<Name*> newParameterNames;
 };
 
+class DifferentiateExpr : public HigherOrderInvokeExpr
+{
+    SLANG_ABSTRACT_AST_CLASS(DifferentiateExpr)
+
+};
     /// An expression of the form `__fwd_diff(fn)` to access the 
     /// forward-mode derivative version of the function `fn`
     ///
-class ForwardDifferentiateExpr: public HigherOrderInvokeExpr
+class ForwardDifferentiateExpr: public DifferentiateExpr
 {
     SLANG_AST_CLASS(ForwardDifferentiateExpr)
+};
+
+    /// An expression of the form `__bwd_diff(fn)` to access the 
+    /// forward-mode derivative version of the function `fn`
+    ///
+class BackwardDifferentiateExpr: public DifferentiateExpr
+{
+    SLANG_AST_CLASS(BackwardDifferentiateExpr)
+};
+
+    /// An express to mark its inner expression as an intended non-differential call.
+class TreatAsDifferentiableExpr : public Expr
+{
+    SLANG_AST_CLASS(TreatAsDifferentiableExpr)
+
+    Expr* innerExpr;
+    Scope* scope;
 };
 
     /// A type expression of the form `__TaggedUnion(A, ...)`.

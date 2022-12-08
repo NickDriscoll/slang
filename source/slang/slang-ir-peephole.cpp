@@ -59,7 +59,7 @@ struct PeepholeContext : InstPassBase
             }
             break;
         case kIROp_FieldExtract:
-            if (inst->getOperand(0)->getOp() == kIROp_makeStruct)
+            if (inst->getOperand(0)->getOp() == kIROp_MakeStruct)
             {
                 auto field = as<IRFieldExtract>(inst)->field.get();
                 Index fieldIndex = -1;
@@ -112,6 +112,9 @@ struct PeepholeContext : InstPassBase
             }
             break;
         case kIROp_Reinterpret:
+        case kIROp_BitCast:
+        case kIROp_IntCast:
+        case kIROp_FloatCast:
             {
                 if (isTypeEqual(inst->getOperand(0)->getDataType(), inst->getDataType()))
                 {
@@ -192,6 +195,42 @@ struct PeepholeContext : InstPassBase
                 if (inst->getOperand(0)->getOp() == kIROp_ExtractExistentialValue)
                 {
                     inst->replaceUsesWith(inst->getOperand(0)->getOperand(0));
+                    inst->removeAndDeallocate();
+                    changed = true;
+                }
+            }
+            break;
+        case kIROp_LookupWitness:
+            {
+                if (inst->getOperand(0)->getOp() == kIROp_WitnessTable)
+                {
+                    auto wt = as<IRWitnessTable>(inst->getOperand(0));
+                    auto key = inst->getOperand(1);
+                    for (auto item : wt->getChildren())
+                    {
+                        if (auto entry = as<IRWitnessTableEntry>(item))
+                        {
+                            if (entry->getRequirementKey() == key)
+                            {
+                                auto value = entry->getSatisfyingVal();
+                                inst->replaceUsesWith(value);
+                                inst->removeAndDeallocate();
+                                changed = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            break;
+        case kIROp_DefaultConstruct:
+            {
+                IRBuilder builder(&sharedBuilderStorage);
+                builder.setInsertBefore(inst);
+                // See if we can replace the default construct inst with concrete values.
+                if (auto newCtor = builder.emitDefaultConstruct(inst->getFullType(), false))
+                {
+                    inst->replaceUsesWith(newCtor);
                     inst->removeAndDeallocate();
                     changed = true;
                 }

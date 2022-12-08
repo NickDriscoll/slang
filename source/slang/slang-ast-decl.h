@@ -391,6 +391,12 @@ class ModuleDecl : public NamespaceDeclBase
     //
     Module* module = nullptr;
 
+        /// Map a decl to the list of its associated decls.
+        ///
+        /// This mapping is filled in during semantic checking, as the decl declarations get checked or generated.
+        ///
+    OrderedDictionary<Decl*, RefPtr<DeclAssociationList>> mapDeclToAssociatedDecls;
+
     SLANG_UNREFLECTED
 
         /// Map a type to the list of extensions of that type (if any) declared in this module
@@ -398,6 +404,7 @@ class ModuleDecl : public NamespaceDeclBase
         /// This mapping is filled in during semantic checking, as `ExtensionDecl`s get checked.
         ///
     Dictionary<AggTypeDecl*, RefPtr<CandidateExtensionList>> mapTypeToCandidateExtensions;
+
 };
 
     /// A declaration that brings members of another declaration or namespace into scope
@@ -511,6 +518,35 @@ class AttributeDecl : public ContainerDecl
     SyntaxClass<NodeBase> syntaxClass;
 };
 
+// A synthesized decl used as a placeholder for a differentiable function requirement. This decl will
+// be a child of interface decl.
+// This allows us to form an interface requirement key for the derivative of an interface function.
+// The synthesized `DerivativeRequirementDecl` will be a child of the original function requirement
+// decl after an interface type is checked.
+class DerivativeRequirementDecl : public FunctionDeclBase
+{
+    SLANG_AST_CLASS(DerivativeRequirementDecl)
+};
+
+// A reference to a synthesized decl representing a differentiable function requirement, this decl will
+// be a child in the orignal function.
+class DerivativeRequirementReferenceDecl : public FunctionDeclBase
+{
+    SLANG_AST_CLASS(DerivativeRequirementReferenceDecl)
+    DerivativeRequirementDecl* referencedDecl;
+};
+
+class ForwardDerivativeRequirementDecl : public DerivativeRequirementDecl
+{
+    SLANG_AST_CLASS(ForwardDerivativeRequirementDecl)
+};
+
+class BackwardDerivativeRequirementDecl : public DerivativeRequirementDecl
+{
+    SLANG_AST_CLASS(BackwardDerivativeRequirementDecl)
+};
+
 bool isInterfaceRequirement(Decl* decl);
+InterfaceDecl* findParentInterfaceDecl(Decl* decl);
 
 } // namespace Slang
